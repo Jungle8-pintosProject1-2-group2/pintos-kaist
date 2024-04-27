@@ -40,6 +40,8 @@ static struct lock tid_lock;
 /* Thread destruction requests */
 static struct list destruction_req;
 
+static struct list sleeping_list;
+
 /* Statistics. */
 static long long idle_ticks;    /* # of timer ticks spent idle. */
 static long long kernel_ticks;  /* # of timer ticks in kernel threads. */
@@ -108,6 +110,7 @@ thread_init (void) {
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
 	list_init (&ready_list);
+	list_init (&sleeping_list);
 	list_init (&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
@@ -587,4 +590,35 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+void thread_sleep(int64_t ticks){
+	struct thread *cur;
+	enum intr_level old_level;
+
+	old_level = intr_disable ();	// 인터럽트 off
+	cur = thread_current ();
+
+	
+	ASSERT(cur != idle_thread);
+	
+	cur->wakeup_tick = ticks;			// 일어날 시간을 저장
+	list_push_back (&sleeping_list, &cur->elem);	// sleep_list 에 추가
+	thread_block ();				// block 상태로 변경
+
+	intr_set_level (old_level);	// 인터럽트 on
+}
+
+void thread_awake(int64_t ticks){
+	struct list_elem *e = list_begin (&sleeping_list);
+
+	while (e != list_end (&sleeping_list)){
+		struct thread *t = list_entry (e, struct thread, elem);
+		if (t->wakeup_tick <= ticks){	// 스레드가 일어날 시간이 되었는지 확인
+			e = list_remove (e);	// sleep list 에서 제거
+			thread_unblock (t);	// 스레드 unblock
+		}
+		else 
+			e = list_next (e);
+	}
 }
