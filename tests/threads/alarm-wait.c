@@ -48,7 +48,7 @@ static void sleeper (void *);
 
 /* Runs THREAD_CNT threads thread sleep ITERATIONS times each. */
 static void
-test_sleep (int thread_cnt, int iterations) 
+test_sleep (int thread_cnt, int iterations) /* 태초에 메인 스레드가 있었다. 그가 test_sleep을 돌린다.*/
 {
   struct sleep_test test;
   struct sleep_thread *threads;
@@ -90,10 +90,11 @@ test_sleep (int thread_cnt, int iterations)
       t->iterations = 0;
 
       snprintf (name, sizeof name, "thread %d", i);
-      thread_create (name, PRI_DEFAULT, sleeper, t);
+      thread_create (name, PRI_DEFAULT, sleeper, t); 
     }
   
   /* Wait long enough for all the threads to finish. */
+  /* 메인 쓰레드는 쓰레드5개를 만들어낸뒤 아주 오래 자러감 그 5개의 쓰레드가 다 돌때 까지*/
   timer_sleep (100 + thread_cnt * iterations * 10 + 100);
 
   /* Acquire the output lock in case some rogue thread is still
@@ -134,6 +135,7 @@ test_sleep (int thread_cnt, int iterations)
 }
 
 /* Sleeper thread. */
+/* 쓰레드마다 sleeper가 돈다.*/
 static void
 sleeper (void *t_) 
 {
@@ -144,7 +146,7 @@ sleeper (void *t_)
   for (i = 1; i <= test->iterations; i++) 
     {
       int64_t sleep_until = test->start + i * t->duration;
-      timer_sleep (sleep_until - timer_ticks ());
+      timer_sleep (sleep_until - timer_ticks ()); 
       lock_acquire (&test->output_lock);
       *test->output_pos++ = t->id;
       lock_release (&test->output_lock);
