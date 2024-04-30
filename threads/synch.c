@@ -45,8 +45,8 @@ void
 sema_init (struct semaphore *sema, unsigned value) {
 	ASSERT (sema != NULL);
 
-	sema->value = value;
-	list_init (&sema->waiters);
+	sema->value = value; 
+	list_init (&sema->waiters); // 대기목록 초기화
 }
 
 /* Down or "P" operation on a semaphore.  Waits for SEMA's value
@@ -65,11 +65,12 @@ sema_down (struct semaphore *sema) {
 	ASSERT (!intr_context ());
 
 	old_level = intr_disable ();
-	while (sema->value == 0) {
-		list_push_back (&sema->waiters, &thread_current ()->elem);
-		thread_block ();
+	while (sema->value == 0) { // 세마포어의 value가 0인동안 반복 -> 세마포어의 value가 0이면 임계구역에 들어가기 위해 대기
+		//list_push_back (&sema->waiters, &thread_current ()->elem); // 현재 세마포어를 대기목록에 추가 -> 해당 스레드가 세마포어를 기다리고 있다는 것을 나타냄
+		list_insert_ordered (&sema->waiters, &thread_current ()->elem, thread_compare_priority, 0);
+		thread_block (); // 시그널을 받을때까지 대기!
 	}
-	sema->value--;
+	sema->value--; // 세마포어의 값을 감소시켜서 세마포어가 현재 사용중임을 나타냄
 	intr_set_level (old_level);
 }
 
@@ -109,10 +110,14 @@ sema_up (struct semaphore *sema) {
 	ASSERT (sema != NULL);
 
 	old_level = intr_disable ();
-	if (!list_empty (&sema->waiters))
+	if (!list_empty (&sema->waiters)) // 대기목록이 비어있지 않은지 확인 -> 대기목록이 비어있지 않다면 세마포어를 기다리는 스레드가 존재한다는 것을 의미
+	{
+		list_sort (&sema->waiters, thread_compare_priority, 0);
 		thread_unblock (list_entry (list_pop_front (&sema->waiters),
-					struct thread, elem));
-	sema->value++;
+					struct thread, elem)); // 세마포어의 대기목록에서 첫번째 스레드를 꺼내서 스케줄링 대기열로 이동. 선입선출로 관리함~
+	}	
+	sema->value++; // 세마포어 값을 증가시켜서 현재 세마포어가 사용되지 않는다는 것을 타나냄
+	thread_test_preemption ();
 	intr_set_level (old_level);
 }
 
@@ -170,8 +175,8 @@ void
 lock_init (struct lock *lock) {
 	ASSERT (lock != NULL);
 
-	lock->holder = NULL;
-	sema_init (&lock->semaphore, 1);
+	lock->holder = NULL; // 락의 소유자를 null로 초기화
+	sema_init (&lock->semaphore, 1); // 락 내부의 세마포어를 초기화. 초기값은 1
 }
 
 /* Acquires LOCK, sleeping until it becomes available if
@@ -188,8 +193,8 @@ lock_acquire (struct lock *lock) {
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
 
-	sema_down (&lock->semaphore);
-	lock->holder = thread_current ();
+	sema_down (&lock->semaphore); // 해당 락의 세마포어를 기다림. 만약 락이 이미 다른 스레드에 의해 소유되었다면, 현재 스레드는 락이 해제될때까지 대기
+	lock->holder = thread_current (); // 현재 스레드를 락의 소유자로 설정.
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -219,11 +224,11 @@ lock_try_acquire (struct lock *lock) {
    handler. */
 void
 lock_release (struct lock *lock) {
-	ASSERT (lock != NULL);
-	ASSERT (lock_held_by_current_thread (lock));
+	ASSERT (lock != NULL); // 락이 null이 아닌지 확인
+	ASSERT (lock_held_by_current_thread (lock)); // 현재 스레드가 락을 소유하고 있는지 확인
 
-	lock->holder = NULL;
-	sema_up (&lock->semaphore);
+	lock->holder = NULL; // 락의 소유자를 null로 바꿔서 해제.
+	sema_up (&lock->semaphore); // 락의 내부 세마포어에 시그널을 보냄 -> 다른 스레드가 락을 획득할 수 있도록 함
 }
 
 /* Returns true if the current thread holds LOCK, false
@@ -249,7 +254,7 @@ void
 cond_init (struct condition *cond) {
 	ASSERT (cond != NULL);
 
-	list_init (&cond->waiters);
+	list_init (&cond->waiters); // 대기목록 초기화
 }
 
 /* Atomically releases LOCK and waits for COND to be signaled by
@@ -279,13 +284,14 @@ cond_wait (struct condition *cond, struct lock *lock) {
 	ASSERT (cond != NULL);
 	ASSERT (lock != NULL);
 	ASSERT (!intr_context ());
-	ASSERT (lock_held_by_current_thread (lock));
+	ASSERT (lock_held_by_current_thread (lock)); // 현재 스레드가 해당 락을 소유하고 있는지 확인
 
-	sema_init (&waiter.semaphore, 0);
-	list_push_back (&cond->waiters, &waiter.elem);
-	lock_release (lock);
-	sema_down (&waiter.semaphore);
-	lock_acquire (lock);
+	sema_init (&waiter.semaphore, 0); // 대기자의 세마포어 초기화. 세마포어를 0으로 초기화해서 대기 상태로 설정
+	//list_push_back (&cond->waiters, &waiter.elem); // 현재 스레드를 대기자 목록에 추가
+	list_insert_ordered (&cond->waiters, &waiter.elem, sema_compare_priority, 0);
+	lock_release (lock); // 현재 락을 해제 -> 조건변수를 기다리는 동안에는 해당 락을 해제하여 다른 스레드가 해당 락을 사용할 수 있도록 함.
+	sema_down (&waiter.semaphore); // 대기자의 세마포어를 기다림 -> 대기자의 세마포어는 해당 조건 변수에 대한 신호를 기다리는데 사용. 신호를 받을때 까지 대기 상태임
+	lock_acquire (lock); // 락을 다시 획득
 }
 
 /* If any threads are waiting on COND (protected by LOCK), then
@@ -302,9 +308,13 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
 	ASSERT (!intr_context ());
 	ASSERT (lock_held_by_current_thread (lock));
 
-	if (!list_empty (&cond->waiters))
+	if (!list_empty (&cond->waiters)) // 대기중인 스레드가 있는지 확인
+	{
+		list_sort (&cond->waiters, sema_compare_priority, 0);
 		sema_up (&list_entry (list_pop_front (&cond->waiters),
-					struct semaphore_elem, elem)->semaphore);
+					struct semaphore_elem, elem)->semaphore); 
+	}
+		// 대기 목록의 첫번째 스레드에 시그널 보냄. 첫번째 대기자를 꺼내서 세마포어 엘리먼트를 대기자 구조체로 변환 후 세마포어에 접근해서 해당 스레드의 대기를 해제
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by
@@ -320,4 +330,17 @@ cond_broadcast (struct condition *cond, struct lock *lock) {
 
 	while (!list_empty (&cond->waiters))
 		cond_signal (cond, lock);
+}
+
+bool 
+sema_compare_priority (const struct list_elem *l, const struct list_elem *s, void *aux UNUSED)
+{
+	struct semaphore_elem *l_sema = list_entry (l, struct semaphore_elem, elem);
+	struct semaphore_elem *s_sema = list_entry (s, struct semaphore_elem, elem);
+
+	struct list *waiter_l_sema = &(l_sema->semaphore.waiters);
+	struct list *waiter_s_sema = &(s_sema->semaphore.waiters);
+
+	return list_entry (list_begin (waiter_l_sema), struct thread, elem)->priority
+		 > list_entry (list_begin (waiter_s_sema), struct thread, elem)->priority;
 }
