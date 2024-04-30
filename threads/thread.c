@@ -1,16 +1,18 @@
 #include "threads/thread.h"
+
 #include <debug.h>
-#include <stddef.h>
 #include <random.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "intrinsic.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-#include "intrinsic.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -43,6 +45,9 @@ static struct list destruction_req;
 static struct list sleeping_list;
 
 /* Statistics. */
+static long long idle_ticks;   /* # of timer ticks spent idle. */
+static long long kernel_ticks; /* # of timer ticks in kernel threads. */
+static long long user_ticks;   /* # of timer ticks in user programs. */
 static long long idle_ticks;   /* # of timer ticks spent idle. */
 static long long kernel_ticks; /* # of timer ticks in kernel threads. */
 static long long user_ticks;   /* # of timer ticks in user programs. */
@@ -106,9 +111,7 @@ void thread_init(void)
 	/* Reload the temporal gdt for the kernel
 	 * This gdt does not include the user context.
 	 * The kernel will rebuild the gdt with user context, in gdt_init (). */
-	struct desc_ptr gdt_ds = {
-		.size = sizeof(gdt) - 1,
-		.address = (uint64_t)gdt};
+	struct desc_ptr gdt_ds = {.size = sizeof(gdt) - 1, .address = (uint64_t)gdt};
 	lgdt(&gdt_ds);
 
 	/* Init the globla thread context */
@@ -221,6 +224,8 @@ tid_t thread_create(const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock(t);
+	// 추가된 부분
+	thread_test_preemption();
 
 	return tid;
 }
@@ -255,15 +260,15 @@ void thread_unblock(struct thread *t)
 
 	old_level = intr_disable();
 	ASSERT(t->status == THREAD_BLOCKED);
-	// 일단 지금은 맨 뒤에 보내고 있다 -> scheduling ㄴㄴ
-	list_push_back(&ready_list, &t->elem);
+	// 스케줄링 해주기 위해 수정한 부분
+	// list_push_back (&ready_list, &t->elem);
+	list_insert_ordered(&ready_list, &t->elem, thread_compare_priority, 0);
 	t->status = THREAD_READY;
 	intr_set_level(old_level);
 }
 
 /* Returns the name of the running thread. */
-const char *
-thread_name(void)
+const char *thread_name(void)
 {
 	return thread_current()->name;
 }
@@ -321,9 +326,10 @@ void thread_yield(void)
 	ASSERT(!intr_context());
 
 	old_level = intr_disable();
-	// ready_list에 넣고
 	if (curr != idle_thread)
-		list_push_back(&ready_list, &curr->elem);
+		// ready_list에 스케줄링해서 넣는 코드
+		// list_push_back (&ready_list, &curr->elem);
+		list_insert_ordered(&ready_list, &curr->elem, thread_compare_priority, 0);
 	// 상태 ready로 변환
 	do_schedule(THREAD_READY);
 	intr_set_level(old_level);
@@ -333,6 +339,7 @@ void thread_yield(void)
 void thread_set_priority(int new_priority)
 {
 	thread_current()->priority = new_priority;
+	thread_test_preemption();
 }
 
 /* Returns the current thread's priority. */
@@ -495,7 +502,6 @@ void do_iret(struct intr_frame *tf)
    It's not safe to call printf() until the thread switch is
    complete.  In practice that means that printf()s should be
    added at the end of the function. */
-
 static void
 thread_launch(struct thread *th)
 {
@@ -577,7 +583,6 @@ do_schedule(int status)
 {
 	ASSERT(intr_get_level() == INTR_OFF);
 	ASSERT(thread_current()->status == THREAD_RUNNING);
-
 	while (!list_empty(&destruction_req))
 	{
 		struct thread *victim =
@@ -667,10 +672,8 @@ void thread_awake(int64_t ticks)
 	// 대기 리스트의 head
 	struct list_elem *e = list_begin(&sleeping_list);
 
-	// tail이 나오기 전까지
 	while (e != list_end(&sleeping_list))
 	{
-		// e를 가진 thread 찾기
 		struct thread *t = list_entry(e, struct thread, elem);
 		if (t->wakeup_tick <= ticks)
 		{						// 스레드가 일어날 시간이 되었는지 확인
@@ -680,4 +683,15 @@ void thread_awake(int64_t ticks)
 		else
 			e = list_next(e);
 	}
+}
+
+bool thread_compare_priority(struct list_elem *l, struct list_elem *s, void *aux UNUSED)
+{
+	return list_entry(l, struct thread, elem)->priority > list_entry(s, struct thread, elem)->priority;
+}
+
+void thread_test_preemption(void)
+{
+	if (!list_empty(&ready_list) && thread_current()->priority < list_entry(list_front(&ready_list), struct thread, elem)->priority)
+		thread_yield();
 }
