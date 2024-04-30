@@ -255,6 +255,7 @@ void thread_unblock(struct thread *t)
 
 	old_level = intr_disable();
 	ASSERT(t->status == THREAD_BLOCKED);
+	// 일단 지금은 맨 뒤에 보내고 있다 -> scheduling ㄴㄴ
 	list_push_back(&ready_list, &t->elem);
 	t->status = THREAD_READY;
 	intr_set_level(old_level);
