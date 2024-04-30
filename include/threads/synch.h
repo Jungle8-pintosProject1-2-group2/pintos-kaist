@@ -18,7 +18,7 @@ void sema_self_test (void);
 
 /* Lock. */
 struct lock {
-	struct thread *holder;      /* Thread holding lock (for debugging). */
+	struct thread *holder;      /* Thread holding lock (for debugging). */ // 현재 락을 가지고 있는 스레드를 가리키는 포인터
 	struct semaphore semaphore; /* Binary semaphore controlling access. */
 };
 
@@ -37,6 +37,8 @@ void cond_init (struct condition *);
 void cond_wait (struct condition *, struct lock *);
 void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
+
+bool sema_compare_priority (const struct list_elem *l, const struct list_elem *s, void *aux);
 
 /* Optimization barrier.
  *
