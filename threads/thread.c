@@ -338,7 +338,9 @@ void thread_yield(void)
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority(int new_priority)
 {
-	thread_current()->priority = new_priority;
+	thread_current()->init_priority = new_priority;
+
+	refresh_priority();
 	thread_test_preemption();
 }
 
@@ -443,6 +445,9 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->tf.rsp = (uint64_t)t + PGSIZE - sizeof(void *);
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
+	t->init_priority = priority;
+	t->wait_on_lock = NULL;
+	list_init(&t->donations);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -690,8 +695,28 @@ bool thread_compare_priority(struct list_elem *l, struct list_elem *s, void *aux
 	return list_entry(l, struct thread, elem)->priority > list_entry(s, struct thread, elem)->priority;
 }
 
+// 현재 스레드와 ready list에 있는 리스트의 우선순위 확인하고 yield
 void thread_test_preemption(void)
 {
 	if (!list_empty(&ready_list) && thread_current()->priority < list_entry(list_front(&ready_list), struct thread, elem)->priority)
 		thread_yield();
+}
+bool thread_compare_donate_priority(const struct list_elem *l,
+									const struct list_elem *s, void *aux UNUSED)
+{
+	return list_entry(l, struct thread, donation_elem)->priority > list_entry(s, struct thread, donation_elem)->priority;
+}
+void donate_priority(void)
+{
+	int depth;
+	struct thread *cur = thread_current();
+
+	for (depth = 0; depth < 8; depth++)
+	{
+		if (!cur->wait_on_lock)
+			break;
+		struct thread *holder = cur->wait_on_lock->holder;
+		holder->priority = cur->priority;
+		cur = holder;
+	}
 }
