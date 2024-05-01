@@ -1,16 +1,18 @@
 #include "threads/thread.h"
+
 #include <debug.h>
-#include <stddef.h>
 #include <random.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "intrinsic.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-#include "intrinsic.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -40,7 +42,12 @@ static struct lock tid_lock;
 /* Thread destruction requests */
 static struct list destruction_req;
 
+static struct list sleeping_list;
+
 /* Statistics. */
+static long long idle_ticks;   /* # of timer ticks spent idle. */
+static long long kernel_ticks; /* # of timer ticks in kernel threads. */
+static long long user_ticks;   /* # of timer ticks in user programs. */
 static long long idle_ticks;   /* # of timer ticks spent idle. */
 static long long kernel_ticks; /* # of timer ticks in kernel threads. */
 static long long user_ticks;   /* # of timer ticks in user programs. */
@@ -71,6 +78,9 @@ static tid_t allocate_tid(void);
  * down to the start of a page.  Since `struct thread' is
  * always at the beginning of a page and the stack pointer is
  * somewhere in the middle, this locates the curent thread. */
+
+// rrsp는 thread 중간을 가리키고,
+// thread는 page 시작점에서 존재하기 때문에 rsp를 가지고 현재 스레드를 반환할 수 있다.
 #define running_thread() ((struct thread *)(pg_round_down(rrsp())))
 
 // Global descriptor table for the thread_start.
@@ -95,20 +105,24 @@ void thread_init(void)
 {
 	ASSERT(intr_get_level() == INTR_OFF);
 
+	// gdt : global descriptor table
+	// 전역(global)으로 쓰일 디스크립터 모아놓은 테이블
+
 	/* Reload the temporal gdt for the kernel
 	 * This gdt does not include the user context.
 	 * The kernel will rebuild the gdt with user context, in gdt_init (). */
-	struct desc_ptr gdt_ds = {
-		.size = sizeof(gdt) - 1,
-		.address = (uint64_t)gdt};
+	struct desc_ptr gdt_ds = {.size = sizeof(gdt) - 1, .address = (uint64_t)gdt};
 	lgdt(&gdt_ds);
 
 	/* Init the globla thread context */
 	lock_init(&tid_lock);
 	list_init(&ready_list);
+	list_init(&sleeping_list);
 	list_init(&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
+	// initial_thread를 가장 처음 동작을 시작한 thread를 가리키게 하고
+	// 이름을 main, 우선순위를 default, 상태는 running으로 설정하고, tid를 할당(아마 1)
 	initial_thread = running_thread();
 	init_thread(initial_thread, "main", PRI_DEFAULT);
 	initial_thread->status = THREAD_RUNNING;
@@ -119,10 +133,13 @@ void thread_init(void)
    Also creates the idle thread. */
 void thread_start(void)
 {
-	printf("start----------\n");
 	/* Create the idle thread. */
 	struct semaphore idle_started;
+	// 세마 0 으로 만듬 -> 먼저 하고 하라는 순서 동기화에 사용
 	sema_init(&idle_started, 0);
+
+	// idle_thread 생성
+	// idle(idle_started)함수를 실행하는 스레드
 	thread_create("idle", PRI_MIN, idle, &idle_started);
 
 	/* Start preemptive thread scheduling. */
@@ -149,6 +166,7 @@ void thread_tick(void)
 		kernel_ticks++;
 
 	/* Enforce preemption. */
+	// 스레드 한개가 한번에 점유하는 최대 ticks : TIME_SLICE
 	if (++thread_ticks >= TIME_SLICE)
 		intr_yield_on_return();
 }
@@ -194,6 +212,7 @@ tid_t thread_create(const char *name, int priority,
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
+	// 여기 상위 3개의 registor 설정때문에 thread가 switch되었을 때 kernel_thread함수가 실행된다.
 	t->tf.rip = (uintptr_t)kernel_thread;
 	t->tf.R.rdi = (uint64_t)function;
 	t->tf.R.rsi = (uint64_t)aux;
@@ -205,6 +224,8 @@ tid_t thread_create(const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock(t);
+	// 추가된 부분
+	thread_test_preemption();
 
 	return tid;
 }
@@ -239,14 +260,15 @@ void thread_unblock(struct thread *t)
 
 	old_level = intr_disable();
 	ASSERT(t->status == THREAD_BLOCKED);
-	list_push_back(&ready_list, &t->elem);
+	// 스케줄링 해주기 위해 수정한 부분
+	// list_push_back (&ready_list, &t->elem);
+	list_insert_ordered(&ready_list, &t->elem, thread_compare_priority, 0);
 	t->status = THREAD_READY;
 	intr_set_level(old_level);
 }
 
 /* Returns the name of the running thread. */
-const char *
-thread_name(void)
+const char *thread_name(void)
 {
 	return thread_current()->name;
 }
@@ -295,6 +317,7 @@ void thread_exit(void)
 
 /* Yields the CPU.  The current thread is not put to sleep and
    may be scheduled again immediately at the scheduler's whim. */
+// 현재 thread가 cpu를 양보하고 ready_list로 자진해서 들어감
 void thread_yield(void)
 {
 	struct thread *curr = thread_current();
@@ -304,7 +327,10 @@ void thread_yield(void)
 
 	old_level = intr_disable();
 	if (curr != idle_thread)
-		list_push_back(&ready_list, &curr->elem);
+		// ready_list에 스케줄링해서 넣는 코드
+		// list_push_back (&ready_list, &curr->elem);
+		list_insert_ordered(&ready_list, &curr->elem, thread_compare_priority, 0);
+	// 상태 ready로 변환
 	do_schedule(THREAD_READY);
 	intr_set_level(old_level);
 }
@@ -312,7 +338,10 @@ void thread_yield(void)
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority(int new_priority)
 {
-	thread_current()->priority = new_priority;
+	thread_current()->init_priority = new_priority;
+
+	refresh_priority();
+	thread_test_preemption();
 }
 
 /* Returns the current thread's priority. */
@@ -383,6 +412,9 @@ idle(void *idle_started_ UNUSED)
 
 		   See [IA32-v2a] "HLT", [IA32-v2b] "STI", and [IA32-v3a]
 		   7.11.1 "HLT Instruction". */
+
+		// 외부 인터럽트를 기다리는 어셈블리 코드
+		// 덕분에 intr_disable() 이전에 timer_interrupt를 수행
 		asm volatile("sti; hlt" : : : "memory");
 	}
 }
@@ -413,6 +445,9 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->tf.rsp = (uint64_t)t + PGSIZE - sizeof(void *);
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
+	t->init_priority = priority;
+	t->wait_on_lock = NULL;
+	list_init(&t->donations);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -430,10 +465,13 @@ next_thread_to_run(void)
 }
 
 /* Use iretq to launch the thread */
+// thread_launch함수에서 rdi를 next_tf구조체의 주소로 설정 -> 여기 인자의 tf는 next_tf를 가리킨다.
 void do_iret(struct intr_frame *tf)
 {
 	__asm __volatile(
+		// next_tf 주소를 sp에 넣기
 		"movq %0, %%rsp\n"
+		// 물리 레지스터에 next_tf의 값들 전부 올린다.
 		"movq 0(%%rsp),%%r15\n"
 		"movq 8(%%rsp),%%r14\n"
 		"movq 16(%%rsp),%%r13\n"
@@ -453,6 +491,8 @@ void do_iret(struct intr_frame *tf)
 		"movw 8(%%rsp),%%ds\n"
 		"movw (%%rsp),%%es\n"
 		"addq $32, %%rsp\n"
+		// interrupt_disable -> schedule -> do_iret 순으로 실행되기 때문애 복귀는 무조건 가능하다.
+		// pc가 인터럽트 발생 전 위치로 복귀
 		"iretq"
 		: : "g"((uint64_t)tf) : "memory");
 }
@@ -481,12 +521,19 @@ thread_launch(struct thread *th)
 	 * until switching is done. */
 	__asm __volatile(
 		/* Store registers that will be used. */
+
+		// 아래 레지스터를 사용해서 이후의 작업을 수행하겠다.
 		"push %%rax\n"
 		"push %%rbx\n"
 		"push %%rcx\n"
+
 		/* Fetch input once */
+		// 현재 thread의 tf주소 rax에 저장
+		// %0 : 0번째 argument -- 가장 아래에 c언어 변수입력하는 곳 확인
 		"movq %0, %%rax\n"
+		// next thread의 tf주소 rcx에 저장
 		"movq %1, %%rcx\n"
+		// 범용 레지스터 값들을 전부다 cur_tf의 메모리 위체에 저장
 		"movq %%r15, 0(%%rax)\n"
 		"movq %%r14, 8(%%rax)\n"
 		"movq %%r13, 16(%%rax)\n"
@@ -520,9 +567,15 @@ thread_launch(struct thread *th)
 		"mov %%rbx, 16(%%rax)\n" // eflags
 		"mov %%rsp, 24(%%rax)\n" // rsp
 		"movw %%ss, 32(%%rax)\n"
+
+		// do_iret 함수의 1st argument로 next_tf구조체를 가리키는 주소 저장
 		"mov %%rcx, %%rdi\n"
+
+		// rsp에 있는 데이터 다시 가져오기
 		"call do_iret\n"
 		"out_iret:\n"
+
+		// 위 어셈블리어 코드 사용할 때 c언어의 변수 사용하기 위한 문법
 		: : "g"(tf_cur), "g"(tf) : "memory");
 }
 
@@ -598,4 +651,72 @@ allocate_tid(void)
 	lock_release(&tid_lock);
 
 	return tid;
+}
+// Thread를 blocked 상태로 만들고 sleep queue에 삽입하여 대기
+void thread_sleep(int64_t ticks)
+{
+	struct thread *cur;
+	enum intr_level old_level;
+
+	old_level = intr_disable(); // 인터럽트 off
+	cur = thread_current();
+
+	// idle thread는 절대 대기에 빠지면 안되기 때문에
+	ASSERT(cur != idle_thread);
+
+	cur->wakeup_tick = ticks;					// 일어날 시간을 저장
+	list_push_back(&sleeping_list, &cur->elem); // sleep_list 에 추가
+	thread_block();								// block 상태로 변경
+
+	intr_set_level(old_level); // 인터럽트 on
+}
+
+// Sleep queue에서 깨워야 할 thread를 찾아서 깨우기
+void thread_awake(int64_t ticks)
+{
+	// 대기 리스트의 head
+	struct list_elem *e = list_begin(&sleeping_list);
+
+	while (e != list_end(&sleeping_list))
+	{
+		struct thread *t = list_entry(e, struct thread, elem);
+		if (t->wakeup_tick <= ticks)
+		{						// 스레드가 일어날 시간이 되었는지 확인
+			e = list_remove(e); // sleep list 에서 제거
+			thread_unblock(t);	// 스레드 unblock
+		}
+		else
+			e = list_next(e);
+	}
+}
+
+bool thread_compare_priority(struct list_elem *l, struct list_elem *s, void *aux UNUSED)
+{
+	return list_entry(l, struct thread, elem)->priority > list_entry(s, struct thread, elem)->priority;
+}
+
+// 현재 스레드와 ready list에 있는 리스트의 우선순위 확인하고 yield
+void thread_test_preemption(void)
+{
+	if (!list_empty(&ready_list) && thread_current()->priority < list_entry(list_front(&ready_list), struct thread, elem)->priority)
+		thread_yield();
+}
+bool thread_compare_donate_priority(const struct list_elem *l,
+									const struct list_elem *s, void *aux UNUSED)
+{
+	return list_entry(l, struct thread, donation_elem)->priority > list_entry(s, struct thread, donation_elem)->priority;
+}
+void donate_priority(void)
+{
+	int depth;
+	struct thread *cur = thread_current();
+
+	for (depth = 0; depth < 8; depth++)
+	{
+		if (!cur->wait_on_lock)
+			break;
+		struct thread *holder = cur->wait_on_lock->holder;
+		holder->priority = cur->priority;
+		cur = holder;
+	}
 }
