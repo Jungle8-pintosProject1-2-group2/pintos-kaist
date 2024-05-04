@@ -471,7 +471,7 @@ void do_iret(struct intr_frame *tf)
 	__asm __volatile(
 		// next_tf 주소를 sp에 넣기
 		"movq %0, %%rsp\n"
-		// 물리 레지스터에 next_tf의 값들 전부 올린다.
+		// 물리 레지스터에 next_tf의 gp레지스터의 값들 전부 올린다.
 		"movq 0(%%rsp),%%r15\n"
 		"movq 8(%%rsp),%%r14\n"
 		"movq 16(%%rsp),%%r13\n"
@@ -487,12 +487,19 @@ void do_iret(struct intr_frame *tf)
 		"movq 96(%%rsp),%%rcx\n"
 		"movq 104(%%rsp),%%rbx\n"
 		"movq 112(%%rsp),%%rax\n"
+
 		"addq $120,%%rsp\n"
-		"movw 8(%%rsp),%%ds\n"
+
 		"movw (%%rsp),%%es\n"
+		"movw 8(%%rsp),%%ds\n"
+
 		"addq $32, %%rsp\n"
+
 		// interrupt_disable -> schedule -> do_iret 순으로 실행되기 때문애 복귀는 무조건 가능하다.
-		// pc가 인터럽트 발생 전 위치로 복귀
+		// rsp 를 사용해서 rip,cs,eflags,rsp,ss를 복원해주는 작업
+		// 왜 쓰냐? 조놈들은 직접 %%문법으로 사용 못하는 것들이니까
+		// pushf instruction을 사요하는 이유와 같다.
+		// 이것 때문에 rsp에 tf의 메모리 주소를 처음에 넣었던 것이다.
 		"iretq"
 		: : "g"((uint64_t)tf) : "memory");
 }
@@ -513,27 +520,13 @@ thread_launch(struct thread *th)
 	uint64_t tf_cur = (uint64_t)&running_thread()->tf;
 	uint64_t tf = (uint64_t)&th->tf;
 	ASSERT(intr_get_level() == INTR_OFF);
-
-	/* The main switching logic.
-	 * We first restore the whole execution context into the intr_frame
-	 * and then switching to the next thread by calling do_iret.
-	 * Note that, we SHOULD NOT use any stack from here
-	 * until switching is done. */
 	__asm __volatile(
-		/* Store registers that will be used. */
-
-		// 아래 레지스터를 사용해서 이후의 작업을 수행하겠다.
 		"push %%rax\n"
 		"push %%rbx\n"
 		"push %%rcx\n"
 
-		/* Fetch input once */
-		// 현재 thread의 tf주소 rax에 저장
-		// %0 : 0번째 argument -- 가장 아래에 c언어 변수입력하는 곳 확인
 		"movq %0, %%rax\n"
-		// next thread의 tf주소 rcx에 저장
 		"movq %1, %%rcx\n"
-		// 범용 레지스터 값들을 전부다 cur_tf의 메모리 위체에 저장
 		"movq %%r15, 0(%%rax)\n"
 		"movq %%r14, 8(%%rax)\n"
 		"movq %%r13, 16(%%rax)\n"
@@ -546,16 +539,19 @@ thread_launch(struct thread *th)
 		"movq %%rdi, 72(%%rax)\n"
 		"movq %%rbp, 80(%%rax)\n"
 		"movq %%rdx, 88(%%rax)\n"
+
 		"pop %%rbx\n" // Saved rcx
 		"movq %%rbx, 96(%%rax)\n"
 		"pop %%rbx\n" // Saved rbx
 		"movq %%rbx, 104(%%rax)\n"
 		"pop %%rbx\n" // Saved rax
 		"movq %%rbx, 112(%%rax)\n"
-		"addq $120, %%rax\n"
-		"movw %%es, (%%rax)\n"
-		"movw %%ds, 8(%%rax)\n"
-		"addq $32, %%rax\n"
+
+		// "addq $120, %%rax\n"
+		"movw %%es, 120(%%rax)\n"
+		"movw %%ds, 128(%%rax)\n"
+		"addq $152, %%rax\n"
+
 		"call __next\n" // read the current rip.
 		"__next:\n"
 		"pop %%rbx\n"
@@ -568,10 +564,7 @@ thread_launch(struct thread *th)
 		"mov %%rsp, 24(%%rax)\n" // rsp
 		"movw %%ss, 32(%%rax)\n"
 
-		// do_iret 함수의 1st argument로 next_tf구조체를 가리키는 주소 저장
 		"mov %%rcx, %%rdi\n"
-
-		// rsp에 있는 데이터 다시 가져오기
 		"call do_iret\n"
 		"out_iret:\n"
 
@@ -698,7 +691,7 @@ bool thread_compare_priority(struct list_elem *l, struct list_elem *s, void *aux
 // 현재 스레드와 ready list에 있는 리스트의 우선순위 확인하고 yield
 void thread_test_preemption(void)
 {
-	if (!list_empty(&ready_list) && thread_current()->priority < list_entry(list_front(&ready_list), struct thread, elem)->priority)
+	if (!list_empty(&ready_list) && !intr_context() && thread_current()->priority < list_entry(list_front(&ready_list), struct thread, elem)->priority)
 		thread_yield();
 }
 bool thread_compare_donate_priority(const struct list_elem *l,

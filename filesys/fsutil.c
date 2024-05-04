@@ -12,54 +12,55 @@
 #include "threads/vaddr.h"
 
 /* List files in the root directory. */
-void
-fsutil_ls (char **argv UNUSED) {
+void fsutil_ls(char **argv UNUSED)
+{
 	struct dir *dir;
 	char name[NAME_MAX + 1];
 
-	printf ("Files in the root directory:\n");
-	dir = dir_open_root ();
+	printf("Files in the root directory:\n");
+	dir = dir_open_root();
 	if (dir == NULL)
-		PANIC ("root dir open failed");
-	while (dir_readdir (dir, name))
-		printf ("%s\n", name);
-	printf ("End of listing.\n");
+		PANIC("root dir open failed");
+	while (dir_readdir(dir, name))
+		printf("%s\n", name);
+	printf("End of listing.\n");
 }
 
 /* Prints the contents of file ARGV[1] to the system console as
  * hex and ASCII. */
-void
-fsutil_cat (char **argv) {
+void fsutil_cat(char **argv)
+{
 	const char *file_name = argv[1];
 
 	struct file *file;
 	char *buffer;
 
-	printf ("Printing '%s' to the console...\n", file_name);
-	file = filesys_open (file_name);
+	printf("Printing '%s' to the console...\n", file_name);
+	file = filesys_open(file_name);
 	if (file == NULL)
-		PANIC ("%s: open failed", file_name);
-	buffer = palloc_get_page (PAL_ASSERT);
-	for (;;) {
-		off_t pos = file_tell (file);
-		off_t n = file_read (file, buffer, PGSIZE);
+		PANIC("%s: open failed", file_name);
+	buffer = palloc_get_page(PAL_ASSERT);
+	for (;;)
+	{
+		off_t pos = file_tell(file);
+		off_t n = file_read(file, buffer, PGSIZE);
 		if (n == 0)
 			break;
 
-		hex_dump (pos, buffer, n, true); 
+		hex_dump(pos, buffer, n, true);
 	}
-	palloc_free_page (buffer);
-	file_close (file);
+	palloc_free_page(buffer);
+	file_close(file);
 }
 
 /* Deletes file ARGV[1]. */
-void
-fsutil_rm (char **argv) {
+void fsutil_rm(char **argv)
+{
 	const char *file_name = argv[1];
 
-	printf ("Deleting '%s'...\n", file_name);
-	if (!filesys_remove (file_name))
-		PANIC ("%s: delete failed\n", file_name);
+	printf("Deleting '%s'...\n", file_name);
+	if (!filesys_remove(file_name))
+		PANIC("%s: delete failed\n", file_name);
 }
 
 /* Copies from the "scratch" disk, hdc or hd1:0 to file ARGV[1]
@@ -74,8 +75,8 @@ fsutil_rm (char **argv) {
  * beginning of the scratch disk.  Later calls advance across the
  * disk.  This disk position is independent of that used for
  * fsutil_get(), so all `put's should precede all `get's. */
-void
-fsutil_put (char **argv) {
+void fsutil_put(char **argv)
+{
 	static disk_sector_t sector = 0;
 
 	const char *file_name = argv[1];
@@ -84,46 +85,58 @@ fsutil_put (char **argv) {
 	off_t size;
 	void *buffer;
 
-	printf ("Putting '%s' into the file system...\n", file_name);
+	printf("Putting '%s' into the file system...\n", file_name);
 
 	/* Allocate buffer. */
-	buffer = malloc (DISK_SECTOR_SIZE);
+	buffer = malloc(DISK_SECTOR_SIZE);
 	if (buffer == NULL)
-		PANIC ("couldn't allocate buffer");
+		PANIC("couldn't allocate buffer");
 
 	/* Open source disk and read file size. */
-	src = disk_get (1, 0);
+	/*Pintos uses disks this way:
+	0:0 - boot loader, command line args, and operating system kernel
+	0:1 - file system
+	1:0 - scratch : 임시 코드를 작성하거나 프로젝트와 관련 없는 코드들을 실행하기 위해 만들 수 있는 임시파일
+	1:1 - swap
+	*/
+	// 디스크 컨트롤러의 채널 번호와 장치 번호를 받아서 해당 디스크에 대한 포인터를 반환.
+	// 즉, 디스크 열고 어디 부분 찾을지 선택 : 여기서는 scratch file
+	src = disk_get(1, 0);
 	if (src == NULL)
-		PANIC ("couldn't open source disk (hdc or hd1:0)");
+		PANIC("couldn't open source disk (hdc or hd1:0)");
 
+	// 디스크 섹터를 읽고 버퍼에 저장
 	/* Read file size. */
-	disk_read (src, sector++, buffer);
-	if (memcmp (buffer, "PUT", 4))
-		PANIC ("%s: missing PUT signature on scratch disk", file_name);
-	size = ((int32_t *) buffer)[1];
+	disk_read(src, sector++, buffer);
+	if (memcmp(buffer, "PUT", 4))
+		PANIC("%s: missing PUT signature on scratch disk", file_name);
+	size = ((int32_t *)buffer)[1];
 	if (size < 0)
-		PANIC ("%s: invalid file size %d", file_name, size);
+		PANIC("%s: invalid file size %d", file_name, size);
 
+	// 파일 만들고,연 다음
 	/* Create destination file. */
-	if (!filesys_create (file_name, size))
-		PANIC ("%s: create failed", file_name);
-	dst = filesys_open (file_name);
+	if (!filesys_create(file_name, size))
+		PANIC("%s: create failed", file_name);
+	dst = filesys_open(file_name);
 	if (dst == NULL)
-		PANIC ("%s: open failed", file_name);
+		PANIC("%s: open failed", file_name);
 
+	// 디스크에 있던 scratch에 대한 내용을 저장한 buffer를 복사한다
 	/* Do copy. */
-	while (size > 0) {
+	while (size > 0)
+	{
 		int chunk_size = size > DISK_SECTOR_SIZE ? DISK_SECTOR_SIZE : size;
-		disk_read (src, sector++, buffer);
-		if (file_write (dst, buffer, chunk_size) != chunk_size)
-			PANIC ("%s: write failed with %"PROTd" bytes unwritten",
-					file_name, size);
+		disk_read(src, sector++, buffer);
+		if (file_write(dst, buffer, chunk_size) != chunk_size)
+			PANIC("%s: write failed with %" PROTd " bytes unwritten",
+				  file_name, size);
 		size -= chunk_size;
 	}
 
 	/* Finish up. */
-	file_close (dst);
-	free (buffer);
+	file_close(dst);
+	free(buffer);
 }
 
 /* Copies file FILE_NAME from the file system to the scratch disk.
@@ -137,8 +150,8 @@ fsutil_put (char **argv) {
  * beginning of the scratch disk.  Later calls advance across the
  * disk.  This disk position is independent of that used for
  * fsutil_put(), so all `put's should precede all `get's. */
-void
-fsutil_get (char **argv) {
+void fsutil_get(char **argv)
+{
 	static disk_sector_t sector = 0;
 
 	const char *file_name = argv[1];
@@ -147,43 +160,44 @@ fsutil_get (char **argv) {
 	struct disk *dst;
 	off_t size;
 
-	printf ("Getting '%s' from the file system...\n", file_name);
+	printf("Getting '%s' from the file system...\n", file_name);
 
 	/* Allocate buffer. */
-	buffer = malloc (DISK_SECTOR_SIZE);
+	buffer = malloc(DISK_SECTOR_SIZE);
 	if (buffer == NULL)
-		PANIC ("couldn't allocate buffer");
+		PANIC("couldn't allocate buffer");
 
 	/* Open source file. */
-	src = filesys_open (file_name);
+	src = filesys_open(file_name);
 	if (src == NULL)
-		PANIC ("%s: open failed", file_name);
-	size = file_length (src);
+		PANIC("%s: open failed", file_name);
+	size = file_length(src);
 
 	/* Open target disk. */
-	dst = disk_get (1, 0);
+	dst = disk_get(1, 0);
 	if (dst == NULL)
-		PANIC ("couldn't open target disk (hdc or hd1:0)");
+		PANIC("couldn't open target disk (hdc or hd1:0)");
 
 	/* Write size to sector 0. */
-	memset (buffer, 0, DISK_SECTOR_SIZE);
-	memcpy (buffer, "GET", 4);
-	((int32_t *) buffer)[1] = size;
-	disk_write (dst, sector++, buffer);
+	memset(buffer, 0, DISK_SECTOR_SIZE);
+	memcpy(buffer, "GET", 4);
+	((int32_t *)buffer)[1] = size;
+	disk_write(dst, sector++, buffer);
 
 	/* Do copy. */
-	while (size > 0) {
+	while (size > 0)
+	{
 		int chunk_size = size > DISK_SECTOR_SIZE ? DISK_SECTOR_SIZE : size;
-		if (sector >= disk_size (dst))
-			PANIC ("%s: out of space on scratch disk", file_name);
-		if (file_read (src, buffer, chunk_size) != chunk_size)
-			PANIC ("%s: read failed with %"PROTd" bytes unread", file_name, size);
-		memset (buffer + chunk_size, 0, DISK_SECTOR_SIZE - chunk_size);
-		disk_write (dst, sector++, buffer);
+		if (sector >= disk_size(dst))
+			PANIC("%s: out of space on scratch disk", file_name);
+		if (file_read(src, buffer, chunk_size) != chunk_size)
+			PANIC("%s: read failed with %" PROTd " bytes unread", file_name, size);
+		memset(buffer + chunk_size, 0, DISK_SECTOR_SIZE - chunk_size);
+		disk_write(dst, sector++, buffer);
 		size -= chunk_size;
 	}
 
 	/* Finish up. */
-	file_close (src);
-	free (buffer);
+	file_close(src);
+	free(buffer);
 }
