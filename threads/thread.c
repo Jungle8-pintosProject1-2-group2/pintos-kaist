@@ -565,6 +565,7 @@ thread_launch(struct thread *th)
 		"movw %%ss, 32(%%rax)\n"
 
 		"mov %%rcx, %%rdi\n"
+
 		"call do_iret\n"
 		"out_iret:\n"
 

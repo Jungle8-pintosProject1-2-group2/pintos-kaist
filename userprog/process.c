@@ -212,8 +212,7 @@ int process_wait(tid_t child_tid UNUSED)
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
-	for (;;)
-		;
+	thread_sleep(150);
 	return -1;
 }
 
@@ -439,35 +438,82 @@ load(const char *file_name, struct intr_frame *if_)
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
 	printf("--------------------------\n");
-	printf("argvs len : %d\n", strlen(next_ptr) + 1);
-	token = strtok_r(NULL, " ", &next_ptr);
-	int count = 0;
+	int token_len = strlen(next_ptr) + strlen(token) + 2;
+	printf("argvs len : %d\n", token_len);
 
-	char *temp = if_->rsp;
-	printf("\tstart address : %p\n", temp);
+	int total_len = token_len % 8 == 0 ? token_len : token_len + 8 - token_len % 8;
+	printf("padding argvs len : %d\n", total_len);
+
+	int count = 0;
+	char *data_temp = if_->rsp;
+	char **address_temp = if_->rsp - total_len;
+
+	// 8의 배수 padding
+	memset(address_temp, 0, 8 - token_len % 8);
+
+	// argv의 마지막을 나타내는 null 포인터
+	address_temp -= 1;
+	memset(address_temp, 0, 8);
+
+	printf("start data address : %p\n", data_temp);
+	printf("start address : %p\n", address_temp);
+
+	// file name 이후의 arg들 stack에 넣기
+	// token = strtok_r(NULL, " ", &next_ptr);
 	while (token)
 	{
+		// 실제 데이터 넣기
 		printf("===========================\n");
-		temp -= strlen(token);
-		printf("\taddress : %p\n", temp);
+		data_temp -= strlen(token) + 1;
+
+		printf("\taddress : %p\n", data_temp);
 		printf("\tstring : %s\n", token);
 		printf("\tlen : %d\n", strlen(token));
 
-		// memcpy(temp, token, strlen(token));
+		memcpy(data_temp, token, strlen(token) + 1);
 
-		printf("\ttemp string : %s\n", *temp);
+		printf("\ttemp string : %s\n", data_temp);
 
-		// count++;
+		// 포인터 넣기
+		address_temp -= 1;
+		*address_temp = data_temp;
+
+		// memcpy(address_temp, &data_temp, sizeof(uintptr_t));
+		printf("\tdata by address : %p\n", *address_temp);
+		printf("\taddress_temp : %p\n", address_temp);
+
+		// 다음 arg로 이동
 		token = strtok_r(NULL, " ", &next_ptr);
+		count++;
 	}
-	printf("===========================\n");
+
+	// 주소값을 역순으로 정렬해서 순서 맞추기
+	char *temp_box;
+	for (int i = 0; i < count; i++)
+		printf("\t before : address - %p , data - %p , string - %s\n", address_temp + i, *(address_temp + i), *(address_temp + i));
+	printf("============vs===============\n");
+	for (int i = 0; i < count / 2; i++)
+	{
+		temp_box = *(address_temp + i);
+		*(address_temp + i) = *(address_temp + (count - 1 - i));
+		*(address_temp + (count - 1 - i)) = temp_box;
+	}
+
+	for (int i = 0; i < count; i++)
+		printf("\t after : address - %p , data - %p , string - %s\n", address_temp + i, *(address_temp + i), *(address_temp + i));
+
+	address_temp -= 1;
+	memset(address_temp, 0, 8);
+	if_->rsp = address_temp + 2;
 
 	// rdi : argc
 	if_->R.rdi = count;
 	// rsi : argv[0]
-	if_->R.rsi = temp;
+	if_->R.rsi = address_temp + 1;
 
 	success = true;
+	hex_dump(if_->R.rsi, if_->R.rsi, total_len + (count + 1) * 8, true);
+	printf("===========================\n");
 
 done:
 	/* We arrive here whether the load is successful or not. */
