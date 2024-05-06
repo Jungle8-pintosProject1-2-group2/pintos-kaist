@@ -189,6 +189,7 @@ int process_exec(char *arg)
 	success = load(file_name, &_if);
 
 	/* If load failed, quit. */
+	// load에서 스택에 다 박았으니까 이건 메모리 해제해준다.
 	palloc_free_page(file_name);
 	if (!success)
 		return -1;

@@ -39,8 +39,8 @@ syscall_entry:
 	movq %rsp, %rdi
 
 check_intr:
-	btsq $9, %r11          /* Check whether we recover the interrupt */
-	jnb no_sti
+	btsq $9, %r11          /* Check whether we recover the interrupt - 여기서 eflags와 9 를가지고 인터럽트 있는지 확인*/ 
+	jnb no_sti			   /* 위 결과에 따라 no_sti로 jump */
 	sti                    /* restore interrupt */
 no_sti:
 	movabs $syscall_handler, %r12

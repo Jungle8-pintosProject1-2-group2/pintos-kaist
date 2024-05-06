@@ -112,7 +112,7 @@ struct thread
 #endif
 
 	/* Owned by thread.c. */
-	struct intr_frame tf; /* Information for switching */
+	struct intr_frame tf; /* Information for switching 너가 TSS니? 네!*/
 	unsigned magic;		  /* Detects stack overflow. */
 };
 
