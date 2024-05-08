@@ -10,6 +10,7 @@ syscall_entry:
 	movabs $tss, %r12
 	movq (%r12), %r12
 	movq 4(%r12), %rsp         /* Read ring0 rsp from the tss */
+	
 	/* Now we are in the kernel stack */
 	push $(SEL_UDSEG)      /* if->ss */
 	push %rbx              /* if->rsp */

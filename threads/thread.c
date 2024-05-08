@@ -221,7 +221,7 @@ tid_t thread_create(const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
-
+	t->parent_thread = thread_current();
 	/* Add to run queue. */
 	thread_unblock(t);
 	// 추가된 부분
@@ -637,6 +637,8 @@ schedule(void)
 static tid_t
 allocate_tid(void)
 {
+	// tid의 시작값이 1이고 계속 +1만 하기 때문에
+	// 부모가 없을 경우 ppid를 0으로 해도 무방하다.
 	static tid_t next_tid = 1;
 	tid_t tid;
 

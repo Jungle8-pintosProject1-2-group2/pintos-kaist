@@ -81,9 +81,16 @@ initd(void *f_name)
  * TID_ERROR if the thread cannot be created. */
 tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 {
-	/* Clone current thread to new thread.*/
-	return thread_create(name,
-						 PRI_DEFAULT, __do_fork, thread_current());
+	// struct thread *syscall_caller = (struct thread *)pg_round_down((uint64_t)(if_->rsp));
+	struct thread *cur = thread_current();
+	sema_init(&(cur->create_sema), 0);
+	memcpy(&cur->if_, if_, sizeof(struct intr_frame));
+
+	tid_t a = thread_create(thread_name, PRI_DEFAULT, __do_fork, cur);
+
+	// 생성이 완료 될때까지 대기
+	sema_down(&(cur->create_sema));
+	return a;
 }
 
 #ifndef VM
@@ -99,22 +106,33 @@ duplicate_pte(uint64_t *pte, void *va, void *aux)
 	bool writable;
 
 	/* 1. TODO: If the parent_page is kernel page, then return immediately. */
+	// clear
+	if (is_kern_pte(pte))
+		return true;
 
 	/* 2. Resolve VA from the parent's page map level 4. */
 	parent_page = pml4_get_page(parent->pml4, va);
 
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
 	 *    TODO: NEWPAGE. */
-
+	newpage = palloc_get_page(PAL_USER);
+	if (newpage)
+		return false;
 	/* 4. TODO: Duplicate parent's page to the new page and
 	 *    TODO: check whether parent's page is writable or not (set WRITABLE
 	 *    TODO: according to the result). */
+	writable = is_writable(pte);
+	memcpy(newpage, parent_page, PGSIZE);
 
 	/* 5. Add new page to child's page table at address VA with WRITABLE
 	 *    permission. */
 	if (!pml4_set_page(current->pml4, va, newpage, writable))
 	{
 		/* 6. TODO: if fail to insert page, do error handling. */
+		// 맵핑에 실패했다면, 만들어 놓은 페이지는 쓸모 없어지니까 free 해주고 false를 return한다.
+		palloc_free_page(newpage);
+		msg("page set fail\n");
+		return false;
 	}
 	return true;
 }
@@ -131,7 +149,8 @@ __do_fork(void *aux)
 	struct thread *parent = (struct thread *)aux;
 	struct thread *current = thread_current();
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-	struct intr_frame *parent_if;
+	// clear
+	struct intr_frame *parent_if = &(parent->if_);
 	bool succ = true;
 
 	/* 1. Read the cpu context to local stack. */
@@ -160,9 +179,16 @@ __do_fork(void *aux)
 
 	process_init();
 
+	// 자식이라면 fork==0에서 결려야 하기 때문에 함수 리턴값인 rax에 0을 설정
+	if_.R.rax = 0;
 	/* Finally, switch to the newly created process. */
 	if (succ)
+	{
+
+		// 성공했다면 kernel thread 다시 작동할 수 있게 sema up
+		sema_up(&(parent->create_sema));
 		do_iret(&if_);
+	}
 error:
 	thread_exit();
 }
@@ -171,7 +197,6 @@ error:
  * Returns -1 on fail. */
 int process_exec(char *arg)
 {
-
 	char *file_name = arg;
 	bool success;
 	/* We cannot use the intr_frame in the thread structure.
@@ -213,6 +238,9 @@ int process_wait(tid_t child_tid UNUSED)
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+	struct thread *syscall_caller = thread_current();
+	sema_init(&syscall_caller->wait_sema, 0);
+	sema_down(&syscall_caller->wait_sema);
 	thread_sleep(150);
 	return -1;
 }
@@ -500,6 +528,7 @@ load(const char *file_name, struct intr_frame *if_)
 	hex_dump(if_->R.rsi, if_->R.rsi, total_len + (count + 1) * 8, true);
 
 done:
+
 	/* We arrive here whether the load is successful or not. */
 	file_close(file);
 	return success;
