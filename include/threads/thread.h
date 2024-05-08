@@ -100,6 +100,21 @@ struct thread
 	struct list donations;
 	struct list_elem donation_elem;
 	int64_t wakeup_tick;
+	/* Owned by thread.c. */
+	struct intr_frame tf; /* Information for switching 너가 TSS니? 네!*/
+	unsigned magic;		  /* Detects stack overflow. */
+	struct list children_list;
+	struct list_elem children_elem;
+	// 부모 없는 상태 초기화
+	// pid_t ppid;
+	struct semaphore create_sema;
+	struct semaphore support_sema;
+	// 자식 프로세스에게 전달할 context
+	struct intr_frame if_;
+	// exit 상태
+	int exit_status;
+	// wait용 sema
+	struct semaphore waiting_sema;
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem; /* List element. */
@@ -113,22 +128,6 @@ struct thread
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
 #endif
-	/* Owned by thread.c. */
-	struct intr_frame tf; /* Information for switching 너가 TSS니? 네!*/
-	unsigned magic;		  /* Detects stack overflow. */
-	// struct list children_list;
-	// struct list_elem children_elem;
-	// 부모 없는 상태 초기화
-	// pid_t ppid;
-	struct semaphore create_sema;
-	// 자식 프로세스에게 전달할 context
-	struct intr_frame if_;
-	// exit 상태
-	int exit_status;
-	// wait용 sema
-	struct semaphore wait_sema;
-	// 부모 thread를 가리키는 포인터
-	struct thread *parent_thread;
 };
 
 /* If false (default), use round-robin scheduler.

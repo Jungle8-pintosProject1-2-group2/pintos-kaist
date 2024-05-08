@@ -127,6 +127,10 @@ void thread_init(void)
 	init_thread(initial_thread, "main", PRI_DEFAULT);
 	initial_thread->status = THREAD_RUNNING;
 	initial_thread->tid = allocate_tid();
+	sema_init(&(initial_thread->create_sema), 0);
+	sema_init(&(initial_thread->support_sema), 0);
+	list_init(&initial_thread->children_list);
+	list_init(&initial_thread->children_list);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -209,6 +213,7 @@ tid_t thread_create(const char *name, int priority,
 	/* Initialize thread. */
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
+	list_push_back(&thread_current()->children_list, &t->children_elem);
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -221,7 +226,6 @@ tid_t thread_create(const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
-	t->parent_thread = thread_current();
 	/* Add to run queue. */
 	thread_unblock(t);
 	// 추가된 부분
@@ -311,6 +315,14 @@ void thread_exit(void)
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
 	intr_disable();
+	struct list *cl = &thread_current()->children_list;
+	struct list_elem *e;
+	struct thread *child;
+	for (e = list_begin(cl); e != list_end(cl); e = list_next(e))
+	{
+		child = list_entry(e, struct thread, children_elem);
+		sema_up(&child->support_sema);
+	}
 	do_schedule(THREAD_DYING);
 	NOT_REACHED();
 }
@@ -399,6 +411,7 @@ idle(void *idle_started_ UNUSED)
 		/* Let someone else run. */
 		intr_disable();
 		thread_block();
+		// printf("---hello... it's me... are you there..?\n");
 
 		/* Re-enable interrupts and wait for the next one.
 
@@ -448,6 +461,10 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->init_priority = priority;
 	t->wait_on_lock = NULL;
 	list_init(&t->donations);
+	list_init(&t->children_list);
+	sema_init(&t->support_sema, 0);
+	sema_init(&t->waiting_sema, 0);
+	sema_init(&t->create_sema, 0);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

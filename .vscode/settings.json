@@ -8,6 +8,7 @@
         "synch.h": "c",
         "thread.h": "c",
         "process.h": "c",
-        "interrupt.h": "c"
+        "interrupt.h": "c",
+        "list.h": "c"
     }
 }

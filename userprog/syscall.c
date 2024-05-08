@@ -79,6 +79,7 @@ void syscall_handler(struct intr_frame *f UNUSED)
 	case SYS_READ: /* Read from a file. */
 		break;
 	case SYS_WRITE: /* Write to a file. */
+		putbuf(f->R.rsi, f->R.rdx);
 		break;
 	case SYS_SEEK: /* Change position in a file. */
 		break;
@@ -90,8 +91,8 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		break;
 	}
 
-	printf("system call!\n");
-	thread_exit();
+	// printf("system call!\n");
+	// thread_exit();
 }
 bool check_addr(intptr_t *addr)
 {
@@ -109,7 +110,10 @@ void exit(int status)
 	// 2. sema_up
 	struct thread *syscall_caller = thread_current();
 	syscall_caller->exit_status = status;
-	sema_up(&syscall_caller->parent_thread->wait_sema);
+	printf("%s: exit(%d)\n", thread_current()->name, status);
+	sema_up(&syscall_caller->waiting_sema);
+	sema_down(&syscall_caller->support_sema);
+
 	thread_exit();
 }
 tid_t fork(const char *thread_name); // in process.c - process_fork
@@ -143,7 +147,9 @@ int open(const char *file)
 }
 int filesize(int fd);
 int read(int fd, void *buffer, unsigned length);
-int write(int fd, const void *buffer, unsigned length);
+int write(int fd, const void *buffer, unsigned length)
+{
+}
 void seek(int fd, unsigned position);
 unsigned tell(int fd);
 void close(int fd);

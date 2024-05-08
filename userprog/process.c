@@ -18,6 +18,7 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "include/lib/kernel/list.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -43,7 +44,7 @@ tid_t process_create_initd(const char *file_name)
 {
 	char *fn_copy;
 	tid_t tid;
-
+	char *save_ptr;
 	// 왜 race가 발생하는지?
 	// initd를 하면 스레드가 바뀌는데 그때 file_name을 들고있으면 수정되거나 할 수 있어서 fn_copy로 자기만의 걸 만들어준다.
 	// 왜 palloc으로 하는지?
@@ -54,7 +55,7 @@ tid_t process_create_initd(const char *file_name)
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy(fn_copy, file_name, PGSIZE);
-
+	file_name = strtok_r(file_name, " ", &save_ptr);
 	/* Create a new thread to execute FILE_NAME. */
 	tid = thread_create(file_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
@@ -83,10 +84,9 @@ tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 {
 	// struct thread *syscall_caller = (struct thread *)pg_round_down((uint64_t)(if_->rsp));
 	struct thread *cur = thread_current();
-	sema_init(&(cur->create_sema), 0);
 	memcpy(&cur->if_, if_, sizeof(struct intr_frame));
 
-	tid_t a = thread_create(thread_name, PRI_DEFAULT, __do_fork, cur);
+	tid_t a = thread_create(name, PRI_DEFAULT, __do_fork, cur);
 
 	// 생성이 완료 될때까지 대기
 	sema_down(&(cur->create_sema));
@@ -107,7 +107,7 @@ duplicate_pte(uint64_t *pte, void *va, void *aux)
 
 	/* 1. TODO: If the parent_page is kernel page, then return immediately. */
 	// clear
-	if (is_kern_pte(pte))
+	if (is_kernel_vaddr(va))
 		return true;
 
 	/* 2. Resolve VA from the parent's page map level 4. */
@@ -116,7 +116,7 @@ duplicate_pte(uint64_t *pte, void *va, void *aux)
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
 	 *    TODO: NEWPAGE. */
 	newpage = palloc_get_page(PAL_USER);
-	if (newpage)
+	if (newpage == NULL)
 		return false;
 	/* 4. TODO: Duplicate parent's page to the new page and
 	 *    TODO: check whether parent's page is writable or not (set WRITABLE
@@ -146,8 +146,8 @@ static void
 __do_fork(void *aux)
 {
 	struct intr_frame if_;
-	struct thread *parent = (struct thread *)aux;
-	struct thread *current = thread_current();
+	struct thread *parent = (struct thread *)aux; // 엄마... 그이름 사무치게 불러봅니다. 엄마!!~~!~!~!~~!~!!
+	struct thread *current = thread_current();	  // 자식아
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
 	// clear
 	struct intr_frame *parent_if = &(parent->if_);
@@ -182,14 +182,16 @@ __do_fork(void *aux)
 	// 자식이라면 fork==0에서 결려야 하기 때문에 함수 리턴값인 rax에 0을 설정
 	if_.R.rax = 0;
 	/* Finally, switch to the newly created process. */
+	sema_up(&(parent->create_sema));
 	if (succ)
 	{
+		// todo: 엄마의 자식 리스트에 나 넣어주기. 나 엄마 자식이예요 응애!
 
 		// 성공했다면 kernel thread 다시 작동할 수 있게 sema up
-		sema_up(&(parent->create_sema));
 		do_iret(&if_);
 	}
 error:
+	sema_up(&(parent->create_sema));
 	thread_exit();
 }
 
@@ -235,14 +237,33 @@ int process_exec(char *arg)
  * does nothing. */
 int process_wait(tid_t child_tid UNUSED)
 {
+	// thread_sleep(150);
+	// return 1;
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
 	struct thread *syscall_caller = thread_current();
-	sema_init(&syscall_caller->wait_sema, 0);
-	sema_down(&syscall_caller->wait_sema);
-	thread_sleep(150);
-	return -1;
+	struct list *cl = &syscall_caller->children_list;
+	struct list_elem *e;
+	struct thread *child;
+	int check = 0;
+	for (e = list_begin(cl); e != list_end(cl); e = list_next(e))
+	{
+		child = list_entry(e, struct thread, children_elem);
+		if (child_tid == child->tid)
+		{
+			check = 1;
+			list_remove(&child->children_elem);
+			break;
+		}
+	}
+	if (check != 1)
+		return -1;
+
+	sema_down(&child->waiting_sema);
+	check = child->exit_status;
+	sema_up(&child->support_sema);
+	return check;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -471,7 +492,13 @@ load(const char *file_name, struct intr_frame *if_)
 	int count = 0;
 	for (int i = 0; i < strlen(next_ptr); i++)
 		if (next_ptr[i] == ' ')
-			count++;
+		{
+			char *tmp = next_ptr + i + 1;
+			while (*tmp++ == ' ')
+			{
+				count++;
+			}
+		}
 
 	int token_len = strlen(next_ptr) + strlen(token) + 1 - count;
 	int total_len = token_len % 8 == 0 ? token_len : token_len + 8 - token_len % 8;
@@ -514,18 +541,18 @@ load(const char *file_name, struct intr_frame *if_)
 		*(address_temp + (count - 1 - i)) = temp_box;
 	}
 
-	for (int i = 0; i < count; i++)
-		printf("\t after : address - %p , data - %p , string - %s\n", address_temp + i, *(address_temp + i), *(address_temp + i));
+	// for (int i = 0; i < count; i++)
+	// 	printf("\t after : address - %p , data - %p , string - %s\n", address_temp + i, *(address_temp + i), *(address_temp + i));
 
 	if_->R.rdi = count;		   // rdi : argc
 	if_->R.rsi = address_temp; // rsi : argv[0]
 	address_temp -= 1;		   // rsp : NULL 포인터 지정
 	memset(address_temp, 0, 8);
 	if_->rsp = address_temp;
-	printf("\t rsp : address - %p , data - %p\n", if_->rsp, *(char *)(if_->rsp));
+	// printf("\t rsp : address - %p , data - %p\n", if_->rsp, *(char *)(if_->rsp));
 
 	success = true;
-	hex_dump(if_->R.rsi, if_->R.rsi, total_len + (count + 1) * 8, true);
+	// hex_dump(if_->R.rsi, if_->R.rsi, total_len + (count + 1) * 8, true);
 
 done:
 
