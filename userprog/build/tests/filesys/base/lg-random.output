@@ -1,40 +1,0 @@
-c[?7l[2J[0mSeaBIOS (version 1.15.0-1)
-
-
-iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0138B4A0+012CB4A0 CA00
-Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
-
-
-Booting from Hard Disk..Kernel command line: -q -f put lg-random run lg-random
-0 ~ 9fc00 1
-100000 ~ 13e0000 1
-Pintos booting with: 
-	base_mem: 0x0 ~ 0x9fc00 (Usable: 639 kB)
-	ext_mem: 0x100000 ~ 0x13e0000 (Usable: 19,328 kB)
-Calibrating timer...  130,867,200 loops/s.
-hd0: unexpected interrupt
-hd0:0: detected 329 sector (164 kB) disk, model "QEMU HARDDISK", serial "QM00001"
-hd0:1: detected 20,160 sector (9 MB) disk, model "QEMU HARDDISK", serial "QM00002"
-hd1: unexpected interrupt
-hd1:0: detected 127 sector (63 kB) disk, model "QEMU HARDDISK", serial "QM00003"
-Formatting file system...done.
-Boot complete.
-Putting 'lg-random' into the file system...
-Executing 'lg-random':
-(lg-random) begin
-(lg-random) create "bazzle"
-(lg-random) open "bazzle"
-(lg-random) write "bazzle" in random order
-â’«ÇAëH»sûÀ’©Kùæ¥~8Oü’J*P¢ŸS7h„Ãÿ²^˜ˆÏÀøÌ}íÍ\–3Ä¿ü@V§Q8Úé‡×K ¯‚TDÖ:¦ûÿqw~2ÔpŽž×S«Cé2Ë>Dì…tÑèw•šx«tYëBcˆZRžçê§h5˜µìÔpý2¿?©?s¯¡`&k €k&°¯)c¨2‡—O ×“müº
-Ÿ,,qcé)®§©©~³‚ÅV¾¸¹6M8˜—ÒŽÐü!B1ñqZú-ÆÂàZÍñZ0°q¤îœÊØÒ¼š&aç»‚}qC	™v¦¬¶~ÊI›]4b«®"­Ô$ed$Ñ¡Ì"÷Ã)+Áò‘ûÕ1²Š†ÈG\‘x_ÛÏ¨šTåOì€œ–‰ŽÿÐT*Ï #QRÑ¬PP	©à·•I zš1ý‰_{{‹a?Š“U^;ÆÁÀ3	Ñw`ñŽx>=ŠîO®9´\žtˆF²7Øb8ÈÁi Oü©õó•¤´N@$°›ˆ-sšuÉ¶Œ-æ:¯ôê¶QO{à§7Åšï$|±]ïÇT[Í§y¯/S-ž®BÇŠ›žÝñÝì²’i::öæß¨±~YtxIÜžƒ¦}iûüÃ2¤‚>s#Èd-(lg-random) write 512 bytes at offset 48128 failed: FAILED
-lg-random: exit(1)
-Execution of 'lg-random' complete.
-Timer: 68 ticks
-Thread: 30 idle ticks, 32 kernel ticks, 6 user ticks
-hd0:0: 0 reads, 0 writes
-hd0:1: 88 reads, 282 writes
-hd1:0: 127 reads, 0 writes
-Console: 1544 characters output
-Keyboard: 0 keys pressed
-Exception: 0 page faults
-Powering off...

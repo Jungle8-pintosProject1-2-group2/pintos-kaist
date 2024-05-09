@@ -66,20 +66,20 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		f->R.rax = wait(f->R.rdi);
 		break;
 	case SYS_CREATE: /* Create a file. */
-		// f->R.rax = create(f->R.rdi, f->R.rsi);
+		f->R.rax = create(f->R.rdi, f->R.rsi);
 		break;
 	case SYS_REMOVE: /* Delete a file. */
-		// f->R.rax = remove(f->R.rdi);
+		f->R.rax = remove(f->R.rdi);
 		break;
 	case SYS_OPEN: /* Open a file. */
-		// f->R.rax = open(f->R.rdi);
+		f->R.rax = open(f->R.rdi);
 		break;
 	case SYS_FILESIZE: /* Obtain a file's size. */
 		break;
 	case SYS_READ: /* Read from a file. */
 		break;
 	case SYS_WRITE: /* Write to a file. */
-		putbuf(f->R.rsi, f->R.rdx);
+		printf(f->R.rsi);
 		break;
 	case SYS_SEEK: /* Change position in a file. */
 		break;
@@ -92,7 +92,6 @@ void syscall_handler(struct intr_frame *f UNUSED)
 	}
 
 	// printf("system call!\n");
-	// thread_exit();
 }
 bool check_addr(intptr_t *addr)
 {
@@ -110,15 +109,15 @@ void exit(int status)
 	// 2. sema_up
 	struct thread *syscall_caller = thread_current();
 	syscall_caller->exit_status = status;
-	printf("%s: exit(%d)\n", thread_current()->name, status);
 	sema_up(&syscall_caller->waiting_sema);
+	printf("%s: exit(%d)\n", syscall_caller->name, status);
 	sema_down(&syscall_caller->support_sema);
-
 	thread_exit();
 }
 tid_t fork(const char *thread_name); // in process.c - process_fork
 int exec(const char *file)
 {
+	check_addr(thread_name);
 	return process_exec(*file);
 }
 int wait(pid_t pid)
@@ -145,11 +144,11 @@ int open(const char *file)
 	}
 	return -1;
 }
-int filesize(int fd);
-int read(int fd, void *buffer, unsigned length);
+int filesize(int fd) {}
+int read(int fd, void *buffer, unsigned length) {}
 int write(int fd, const void *buffer, unsigned length)
 {
 }
-void seek(int fd, unsigned position);
-unsigned tell(int fd);
-void close(int fd);
+void seek(int fd, unsigned position) {}
+unsigned tell(int fd) {}
+void close(int fd) {}

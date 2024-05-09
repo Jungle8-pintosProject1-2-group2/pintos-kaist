@@ -103,18 +103,20 @@ struct thread
 	/* Owned by thread.c. */
 	struct intr_frame tf; /* Information for switching 너가 TSS니? 네!*/
 	unsigned magic;		  /* Detects stack overflow. */
+
+	// 자식 프로세스 리스트
 	struct list children_list;
 	struct list_elem children_elem;
-	// 부모 없는 상태 초기화
-	// pid_t ppid;
+	// fork시 사용되는 세마포어
 	struct semaphore create_sema;
 	struct semaphore support_sema;
+	// wait에서 해용되는 세마포어
+	struct semaphore waiting_sema;
 	// 자식 프로세스에게 전달할 context
 	struct intr_frame if_;
 	// exit 상태
 	int exit_status;
 	// wait용 sema
-	struct semaphore waiting_sema;
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem; /* List element. */

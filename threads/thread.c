@@ -127,12 +127,7 @@ void thread_init(void)
 	init_thread(initial_thread, "main", PRI_DEFAULT);
 	initial_thread->status = THREAD_RUNNING;
 	initial_thread->tid = allocate_tid();
-	sema_init(&(initial_thread->create_sema), 0);
-	sema_init(&(initial_thread->support_sema), 0);
-	list_init(&initial_thread->children_list);
-	list_init(&initial_thread->children_list);
 }
-
 /* Starts preemptive thread scheduling by enabling interrupts.
    Also creates the idle thread. */
 void thread_start(void)
@@ -315,6 +310,9 @@ void thread_exit(void)
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
 	intr_disable();
+
+	// 프로세스가 종료될 때, 해당 프로세스를 wait하고있는 모든 프로세스에게
+	// sema_up 해준다.
 	struct list *cl = &thread_current()->children_list;
 	struct list_elem *e;
 	struct thread *child;
