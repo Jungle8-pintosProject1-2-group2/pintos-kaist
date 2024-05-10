@@ -9,6 +9,12 @@
         "thread.h": "c",
         "process.h": "c",
         "interrupt.h": "c",
-        "list.h": "c"
+        "list.h": "c",
+        "filesys.h": "c",
+        "serial.h": "c",
+        "io.h": "c",
+        "stdio.h": "c",
+        "*.inc": "c",
+        "syscall.h": "c"
     }
 }

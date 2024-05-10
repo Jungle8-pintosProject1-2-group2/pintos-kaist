@@ -132,10 +132,12 @@ page_fault(struct intr_frame *f)
 	   that caused the fault (that's f->rip). */
 
 	fault_addr = (void *)rcr2();
+	check_addr(fault_addr);
+
 	if (fault_addr <= KERN_BASE)
 	{
 		printf("유저 가상 메모리 범위 초과\n");
-		kill(f);
+		exit(-1);
 	}
 
 	/* Turn interrupts back on (they were only off so that we could

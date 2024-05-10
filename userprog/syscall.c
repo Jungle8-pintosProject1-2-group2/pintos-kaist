@@ -7,11 +7,13 @@
 #include "userprog/gdt.h"
 #include "threads/flags.h"
 #include "intrinsic.h"
+
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "include/lib/user/syscall.h"
 #include "include/threads/vaddr.h"
-
+// 필요한가
+struct lock file_rw_lock;
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
 
@@ -39,6 +41,7 @@ void syscall_init(void)
 	 * mode stack. Therefore, we masked the FLAG_FL. */
 	write_msr(MSR_SYSCALL_MASK,
 			  FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
+	lock_init(&file_rw_lock);
 }
 
 /* The main system call interface */
@@ -63,7 +66,7 @@ void syscall_handler(struct intr_frame *f UNUSED)
 			exit(-1);
 		break;
 	case SYS_WAIT: /* Wait for a child process to die. */
-		f->R.rax = wait(f->R.rdi);
+		f->R.rax = process_wait(f->R.rdi);
 		break;
 	case SYS_CREATE: /* Create a file. */
 		f->R.rax = create(f->R.rdi, f->R.rsi);
@@ -75,15 +78,31 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		f->R.rax = open(f->R.rdi);
 		break;
 	case SYS_FILESIZE: /* Obtain a file's size. */
+		f->R.rax = filesize(f->R.rdi);
 		break;
 	case SYS_READ: /* Read from a file. */
+		if (f->R.rdi == 0)
+			input_getc();
+		else if (f->R.rdi == 1)
+			exit(-1);
+		else
+			f->R.rax = read(f->R.rdi, f->R.rsi, f->R.rdx);
 		break;
 	case SYS_WRITE: /* Write to a file. */
-		printf(f->R.rsi);
+		// printf(f->R.rsi);
+		if (f->R.rdi == 0)
+			exit(-1);
+		else if (f->R.rdi == 1)
+			putbuf(f->R.rsi, f->R.rdx);
+		else
+			f->R.rax = write(f->R.rdi, f->R.rsi, f->R.rdx);
+
 		break;
 	case SYS_SEEK: /* Change position in a file. */
+		seek(f->R.rdi, f->R.rsi);
 		break;
 	case SYS_TELL: /* Report current position in a file. */
+		f->R.rax = tell(f->R.rdi);
 		break;
 	case SYS_CLOSE: /* Close a file. */
 		break;
@@ -107,23 +126,25 @@ void exit(int status)
 	// TODO :
 	// 1. 상태 수정 -clear
 	// 2. sema_up
+	// 3. 그동안 연 파일 다 닥기
 	struct thread *syscall_caller = thread_current();
 	syscall_caller->exit_status = status;
-	sema_up(&syscall_caller->waiting_sema);
+	file_close(syscall_caller->running_file);
 	printf("%s: exit(%d)\n", syscall_caller->name, status);
+	sema_up(&syscall_caller->waiting_sema);
 	sema_down(&syscall_caller->support_sema);
 	thread_exit();
 }
 tid_t fork(const char *thread_name); // in process.c - process_fork
 int exec(const char *file)
 {
-	check_addr(thread_name);
-	return process_exec(*file);
+	check_addr(file);
+	return process_exec(file);
 }
-int wait(pid_t pid)
-{
-	return process_wait(pid);
-}
+// int wait(pid_t pid)
+// {
+// 	return process_wait(pid);
+// }
 bool create(const char *file, unsigned initial_size)
 {
 	check_addr(file);
@@ -136,19 +157,68 @@ bool remove(const char *file)
 }
 int open(const char *file)
 {
-	struct file *a;
 	check_addr(file);
+	struct file *a;
+	int out_fd = 3;
+
+	// 파일을 정상적으로 열었다면
 	if (a = filesys_open(file))
 	{
-		// fileptr의 fd를 반환
+		// file_deny_write(a);
+		struct file **fdt = thread_current()->fdt;
+		// next_fd 위치 찾기
+		while (fdt[out_fd] != NULL)
+			out_fd++;
+		fdt[out_fd] = a;
+
+		return out_fd;
 	}
-	return -1;
+	else
+		return -1;
 }
-int filesize(int fd) {}
-int read(int fd, void *buffer, unsigned length) {}
+int filesize(int fd)
+{
+	if (!thread_current()->fdt[fd])
+		return -1;
+	return file_length(thread_current()->fdt[fd]);
+}
+int read(int fd, void *buffer, unsigned length)
+{
+	struct thread *t = thread_current();
+	check_addr(buffer);
+	if (!t->fdt[fd])
+		return -1;
+	lock_acquire(&file_rw_lock);
+	int a = file_read(t->fdt[fd], buffer, length);
+	lock_release(&file_rw_lock);
+	return a;
+}
 int write(int fd, const void *buffer, unsigned length)
 {
+	check_addr(buffer);
+	if (!thread_current()->fdt[fd])
+		return -1;
+	lock_acquire(&file_rw_lock);
+	int a = file_write(thread_current()->fdt[fd], buffer, length);
+	lock_release(&file_rw_lock);
+	return a;
 }
-void seek(int fd, unsigned position) {}
-unsigned tell(int fd) {}
-void close(int fd) {}
+
+void seek(int fd, unsigned position)
+{
+	if (!thread_current()->fdt[fd])
+		return -1;
+	return file_seek(thread_current()->fdt[fd], position);
+}
+unsigned tell(int fd)
+{
+	if (!thread_current()->fdt[fd])
+		return -1;
+	return file_tell(thread_current()->fdt[fd]);
+}
+void close(int fd)
+{
+	if (!thread_current()->fdt[fd])
+		return -1;
+	file_close(thread_current()->fdt[fd]);
+}

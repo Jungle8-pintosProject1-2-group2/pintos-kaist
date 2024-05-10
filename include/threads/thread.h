@@ -120,6 +120,8 @@ struct thread
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem; /* List element. */
+	struct file **fdt;
+	struct file *running_file;
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */

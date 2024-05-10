@@ -90,7 +90,26 @@ tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 
 	// 생성이 완료 될때까지 대기
 	sema_down(&(cur->create_sema));
-	return a;
+	// a 가 -1이 아니라면 정상 동작
+	if (a != -1)
+		return a;
+	// a가 -1이라면
+	// 미리 실패한 child thread 찾기
+	struct list *cl = &cur->children_list;
+	struct list_elem *e;
+	struct thread *child;
+	int check = 0;
+	for (e = list_begin(cl); e != list_end(cl); e = list_next(e))
+	{
+		child = list_entry(e, struct thread, children_elem);
+		if (-1 == child->tid)
+		{
+			// list_remove(&child->children_elem);
+			sema_up(&(cur->create_sema));
+			return -1;
+			break;
+		}
+	}
 }
 
 #ifndef VM
@@ -151,7 +170,6 @@ __do_fork(void *aux)
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
 	// clear
 	struct intr_frame *parent_if = &(parent->if_);
-	bool succ = true;
 
 	/* 1. Read the cpu context to local stack. */
 	memcpy(&if_, parent_if, sizeof(struct intr_frame));
@@ -176,30 +194,42 @@ __do_fork(void *aux)
 	 * TODO:       in include/filesys/file.h. Note that parent should not return
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
+	for (int i = 0; i < 192; i++)
+	{
+		if (parent->fdt[i])
+			current->fdt[i] = file_duplicate(parent->fdt[i]);
+	}
 
 	process_init();
 
 	// 자식이라면 fork==0에서 결려야 하기 때문에 함수 리턴값인 rax에 0을 설정
 	if_.R.rax = 0;
+
 	/* Finally, switch to the newly created process. */
 	sema_up(&(parent->create_sema));
-	if (succ)
-	{
-		// todo: 엄마의 자식 리스트에 나 넣어주기. 나 엄마 자식이예요 응애!
-
-		// 성공했다면 kernel thread 다시 작동할 수 있게 sema up
-		do_iret(&if_);
-	}
+	// 성공했다면 kernel thread 다시 작동할 수 있게 sema up
+	do_iret(&if_);
 error:
+	// fork할 때 실패하면 id -1로
+	current->tid = -1;
 	sema_up(&(parent->create_sema));
-	thread_exit();
+	sema_down(&(parent->create_sema));
+	// thread_exit();
+	exit(-1);
 }
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
+// todo : memory leak arg 생각하기
 int process_exec(char *arg)
 {
-	char *file_name = arg;
+	// 아래에서 process_cleanup()
+	char *file_name;
+	file_name = palloc_get_page(0);
+	if (file_name == NULL)
+		return TID_ERROR;
+	strlcpy(file_name, arg, PGSIZE);
+
 	bool success;
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
@@ -392,10 +422,11 @@ load(const char *file_name, struct intr_frame *if_)
 	off_t file_ofs;
 	bool success = false;
 	int i;
-
+	// printf("stop\n");
 	// arg 토큰화
 	char *token;
 	char *next_ptr;
+	// 토큰화하려는 주소가 유저 가상 메모리 범위 초과하면 에러
 	token = strtok_r(file_name, " ", &next_ptr);
 
 	/* Allocate and activate page directory. */
@@ -553,11 +584,13 @@ load(const char *file_name, struct intr_frame *if_)
 
 	success = true;
 	// hex_dump(if_->R.rsi, if_->R.rsi, total_len + (count + 1) * 8, true);
-
 done:
-
+	// rox용
+	if (file != NULL)
+		t->running_file = file;
 	/* We arrive here whether the load is successful or not. */
-	file_close(file);
+	// file_close(file);
+	file_deny_write(t->running_file);
 	return success;
 }
 

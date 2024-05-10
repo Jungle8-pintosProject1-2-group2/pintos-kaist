@@ -201,6 +201,7 @@ tid_t thread_create(const char *name, int priority,
 	ASSERT(function != NULL);
 
 	/* Allocate thread. */
+	// t = palloc_get_page(PAL_ZERO);
 	t = palloc_get_page(PAL_ZERO);
 	if (t == NULL)
 		return TID_ERROR;
@@ -209,7 +210,7 @@ tid_t thread_create(const char *name, int priority,
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
 	list_push_back(&thread_current()->children_list, &t->children_elem);
-
+	fdt_init(t);
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
 	// 여기 상위 3개의 registor 설정때문에 thread가 switch되었을 때 kernel_thread함수가 실행된다.
@@ -256,7 +257,6 @@ void thread_unblock(struct thread *t)
 	enum intr_level old_level;
 
 	ASSERT(is_thread(t));
-
 	old_level = intr_disable();
 	ASSERT(t->status == THREAD_BLOCKED);
 	// 스케줄링 해주기 위해 수정한 부분
@@ -463,6 +463,7 @@ init_thread(struct thread *t, const char *name, int priority)
 	sema_init(&t->support_sema, 0);
 	sema_init(&t->waiting_sema, 0);
 	sema_init(&t->create_sema, 0);
+	// fdt_init(t);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -601,6 +602,7 @@ do_schedule(int status)
 	{
 		struct thread *victim =
 			list_entry(list_pop_front(&destruction_req), struct thread, elem);
+		// palloc_free_page(victim);
 		palloc_free_page(victim);
 	}
 	thread_current()->status = status;
@@ -729,5 +731,16 @@ void donate_priority(void)
 		struct thread *holder = cur->wait_on_lock->holder;
 		holder->priority = cur->priority;
 		cur = holder;
+	}
+}
+void fdt_init(struct thread *t)
+{
+	t->fdt = (struct file **)palloc_get_page(PAL_ZERO);
+	if (t->fdt == NULL)
+	{
+
+		palloc_free_page(t->fdt);
+		palloc_free_page(t);
+		return TID_ERROR;
 	}
 }
