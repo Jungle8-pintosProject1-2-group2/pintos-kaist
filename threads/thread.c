@@ -201,16 +201,20 @@ tid_t thread_create(const char *name, int priority,
 	ASSERT(function != NULL);
 
 	/* Allocate thread. */
-	// t = palloc_get_page(PAL_ZERO);
 	t = palloc_get_page(PAL_ZERO);
+	// t = palloc_get_multiple(PAL_ZERO, 100);
 	if (t == NULL)
+	{
+		palloc_free_page(t);
 		return TID_ERROR;
+	}
 
 	/* Initialize thread. */
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
 	list_push_back(&thread_current()->children_list, &t->children_elem);
 	fdt_init(t);
+
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
 	// 여기 상위 3개의 registor 설정때문에 thread가 switch되었을 때 kernel_thread함수가 실행된다.
@@ -223,6 +227,15 @@ tid_t thread_create(const char *name, int priority,
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
 	/* Add to run queue. */
+	// 스택 돼지처럼 먹어서 overflow 난 거임
+	// if (t->magic != THREAD_MAGIC)
+	// {
+	// 	// printf("---111111---\n");
+	// 	// palloc_free_page(t);
+	// 	// thread_test_preemption();
+	// 	exit(-1);
+	// 	return -1;
+	// }
 	thread_unblock(t);
 	// 추가된 부분
 	thread_test_preemption();
@@ -313,14 +326,7 @@ void thread_exit(void)
 
 	// 프로세스가 종료될 때, 해당 프로세스를 wait하고있는 모든 프로세스에게
 	// sema_up 해준다.
-	struct list *cl = &thread_current()->children_list;
-	struct list_elem *e;
-	struct thread *child;
-	for (e = list_begin(cl); e != list_end(cl); e = list_next(e))
-	{
-		child = list_entry(e, struct thread, children_elem);
-		sema_up(&child->support_sema);
-	}
+
 	do_schedule(THREAD_DYING);
 	NOT_REACHED();
 }
@@ -602,8 +608,8 @@ do_schedule(int status)
 	{
 		struct thread *victim =
 			list_entry(list_pop_front(&destruction_req), struct thread, elem);
-		// palloc_free_page(victim);
 		palloc_free_page(victim);
+		// palloc_free_multiple(victim, 100);
 	}
 	thread_current()->status = status;
 	schedule();
@@ -738,9 +744,7 @@ void fdt_init(struct thread *t)
 	t->fdt = (struct file **)palloc_get_page(PAL_ZERO);
 	if (t->fdt == NULL)
 	{
-
 		palloc_free_page(t->fdt);
-		palloc_free_page(t);
-		return TID_ERROR;
+		exit(-1);
 	}
 }

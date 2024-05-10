@@ -89,27 +89,24 @@ tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 	tid_t a = thread_create(name, PRI_DEFAULT, __do_fork, cur);
 
 	// 생성이 완료 될때까지 대기
-	sema_down(&(cur->create_sema));
-	// a 가 -1이 아니라면 정상 동작
-	if (a != -1)
-		return a;
-	// a가 -1이라면
+
 	// 미리 실패한 child thread 찾기
 	struct list *cl = &cur->children_list;
 	struct list_elem *e;
 	struct thread *child;
-	int check = 0;
 	for (e = list_begin(cl); e != list_end(cl); e = list_next(e))
 	{
 		child = list_entry(e, struct thread, children_elem);
-		if (-1 == child->tid)
+		if (child->tid == a)
 		{
-			// list_remove(&child->children_elem);
-			sema_up(&(cur->create_sema));
-			return -1;
-			break;
+			sema_down(&(child->create_sema));
+			if (child->exit_status < 0)
+				return -1;
 		}
 	}
+
+	// a 가 -1이 아니라면 정상 동작
+	return a;
 }
 
 #ifndef VM
@@ -150,7 +147,7 @@ duplicate_pte(uint64_t *pte, void *va, void *aux)
 		/* 6. TODO: if fail to insert page, do error handling. */
 		// 맵핑에 실패했다면, 만들어 놓은 페이지는 쓸모 없어지니까 free 해주고 false를 return한다.
 		palloc_free_page(newpage);
-		msg("page set fail\n");
+		// msg("page set fail\n");
 		return false;
 	}
 	return true;
@@ -165,8 +162,9 @@ static void
 __do_fork(void *aux)
 {
 	struct intr_frame if_;
-	struct thread *parent = (struct thread *)aux; // 엄마... 그이름 사무치게 불러봅니다. 엄마!!~~!~!~!~~!~!!
-	struct thread *current = thread_current();	  // 자식아
+	struct thread *parent = (struct thread *)aux; // 엄마
+	struct thread *current = thread_current();	  // 자식
+
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
 	// clear
 	struct intr_frame *parent_if = &(parent->if_);
@@ -206,14 +204,13 @@ __do_fork(void *aux)
 	if_.R.rax = 0;
 
 	/* Finally, switch to the newly created process. */
-	sema_up(&(parent->create_sema));
+	sema_up(&(current->create_sema));
 	// 성공했다면 kernel thread 다시 작동할 수 있게 sema up
 	do_iret(&if_);
 error:
 	// fork할 때 실패하면 id -1로
-	current->tid = -1;
-	sema_up(&(parent->create_sema));
-	sema_down(&(parent->create_sema));
+	current->exit_status = -1;
+	sema_up(&(current->create_sema));
 	// thread_exit();
 	exit(-1);
 }
@@ -282,18 +279,14 @@ int process_wait(tid_t child_tid UNUSED)
 		child = list_entry(e, struct thread, children_elem);
 		if (child_tid == child->tid)
 		{
-			check = 1;
-			list_remove(&child->children_elem);
-			break;
+			sema_down(&child->waiting_sema);
+			check = child->exit_status;
+			list_remove(e);
+			sema_up(&child->support_sema);
+			return check;
 		}
 	}
-	if (check != 1)
-		return -1;
-
-	sema_down(&child->waiting_sema);
-	check = child->exit_status;
-	sema_up(&child->support_sema);
-	return check;
+	return -1;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -304,8 +297,25 @@ void process_exit(void)
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
+	file_close(curr->running_file);
+	for (int i = 0; i < 192; i++)
+	{
+		file_close(curr->fdt[i]);
+	}
+	palloc_free_page(curr->fdt);
+
+	struct list *cl = &thread_current()->children_list;
+	struct list_elem *e;
+	struct thread *child;
+	for (e = list_begin(cl); e != list_end(cl); e = list_next(e))
+	{
+		child = list_entry(e, struct thread, children_elem);
+		sema_up(&child->support_sema);
+	}
 
 	process_cleanup();
+	sema_up(&curr->waiting_sema);
+	sema_down(&curr->support_sema);
 }
 
 /* Free the current process's resources. */

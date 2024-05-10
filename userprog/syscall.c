@@ -1,4 +1,5 @@
 #include "userprog/syscall.h"
+#include "userprog/process.h"
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
@@ -16,6 +17,7 @@
 struct lock file_rw_lock;
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
+bool check_addr(intptr_t *);
 
 /* System call.
  *
@@ -59,6 +61,7 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		exit(f->R.rdi);
 		break;
 	case SYS_FORK: /* Clone current process. */
+		check_addr(f->R.rdi);
 		f->R.rax = process_fork(f->R.rdi, f);
 		break;
 	case SYS_EXEC: /* Switch current process. */
@@ -96,7 +99,6 @@ void syscall_handler(struct intr_frame *f UNUSED)
 			putbuf(f->R.rsi, f->R.rdx);
 		else
 			f->R.rax = write(f->R.rdi, f->R.rsi, f->R.rdx);
-
 		break;
 	case SYS_SEEK: /* Change position in a file. */
 		seek(f->R.rdi, f->R.rsi);
@@ -124,18 +126,15 @@ void halt(void)
 void exit(int status)
 {
 	// TODO :
-	// 1. 상태 수정 -clear
-	// 2. sema_up
-	// 3. 그동안 연 파일 다 닥기
+	// 1. 그동안 연 파일 다 닫기
+	// 2. page_fault에 의한 exit의 경우 생각해서 다시 코딩
 	struct thread *syscall_caller = thread_current();
 	syscall_caller->exit_status = status;
-	file_close(syscall_caller->running_file);
 	printf("%s: exit(%d)\n", syscall_caller->name, status);
-	sema_up(&syscall_caller->waiting_sema);
-	sema_down(&syscall_caller->support_sema);
 	thread_exit();
 }
 tid_t fork(const char *thread_name); // in process.c - process_fork
+
 int exec(const char *file)
 {
 	check_addr(file);
@@ -159,23 +158,30 @@ int open(const char *file)
 {
 	check_addr(file);
 	struct file *a;
-	int out_fd = 3;
+	int out_fd = 0;
+	struct file **fdt = thread_current()->fdt;
 
+	// fd넣을 위치 찾기
+	for (int i = 3; i < 192; i++)
+	{
+		if (fdt[i] == NULL)
+			out_fd = i;
+	}
+
+	if (out_fd == 0)
+		return -1;
+
+	// 파일을 넣을 곳이 있고
 	// 파일을 정상적으로 열었다면
 	if (a = filesys_open(file))
 	{
-		// file_deny_write(a);
-		struct file **fdt = thread_current()->fdt;
-		// next_fd 위치 찾기
-		while (fdt[out_fd] != NULL)
-			out_fd++;
 		fdt[out_fd] = a;
-
 		return out_fd;
 	}
 	else
 		return -1;
 }
+
 int filesize(int fd)
 {
 	if (!thread_current()->fdt[fd])
@@ -218,7 +224,9 @@ unsigned tell(int fd)
 }
 void close(int fd)
 {
-	if (!thread_current()->fdt[fd])
-		return -1;
-	file_close(thread_current()->fdt[fd]);
+	if (fd < 192)
+	{
+		file_close(thread_current()->fdt[fd]);
+		thread_current()->fdt[fd] = NULL;
+	}
 }
