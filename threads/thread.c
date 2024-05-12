@@ -128,7 +128,6 @@ void thread_init(void)
 	initial_thread->status = THREAD_RUNNING;
 	initial_thread->tid = allocate_tid();
 }
-
 /* Starts preemptive thread scheduling by enabling interrupts.
    Also creates the idle thread. */
 void thread_start(void)
@@ -203,12 +202,18 @@ tid_t thread_create(const char *name, int priority,
 
 	/* Allocate thread. */
 	t = palloc_get_page(PAL_ZERO);
+	// t = palloc_get_multiple(PAL_ZERO, 100);
 	if (t == NULL)
+	{
+		palloc_free_page(t);
 		return TID_ERROR;
+	}
 
 	/* Initialize thread. */
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
+	list_push_back(&thread_current()->children_list, &t->children_elem);
+	fdt_init(t);
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -221,8 +226,16 @@ tid_t thread_create(const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
-
 	/* Add to run queue. */
+	// 스택 돼지처럼 먹어서 overflow 난 거임
+	// if (t->magic != THREAD_MAGIC)
+	// {
+	// 	// printf("---111111---\n");
+	// 	// palloc_free_page(t);
+	// 	// thread_test_preemption();
+	// 	exit(-1);
+	// 	return -1;
+	// }
 	thread_unblock(t);
 	// 추가된 부분
 	thread_test_preemption();
@@ -257,7 +270,6 @@ void thread_unblock(struct thread *t)
 	enum intr_level old_level;
 
 	ASSERT(is_thread(t));
-
 	old_level = intr_disable();
 	ASSERT(t->status == THREAD_BLOCKED);
 	// 스케줄링 해주기 위해 수정한 부분
@@ -311,6 +323,10 @@ void thread_exit(void)
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
 	intr_disable();
+
+	// 프로세스가 종료될 때, 해당 프로세스를 wait하고있는 모든 프로세스에게
+	// sema_up 해준다.
+
 	do_schedule(THREAD_DYING);
 	NOT_REACHED();
 }
@@ -399,6 +415,7 @@ idle(void *idle_started_ UNUSED)
 		/* Let someone else run. */
 		intr_disable();
 		thread_block();
+		// printf("---hello... it's me... are you there..?\n");
 
 		/* Re-enable interrupts and wait for the next one.
 
@@ -448,6 +465,11 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->init_priority = priority;
 	t->wait_on_lock = NULL;
 	list_init(&t->donations);
+	list_init(&t->children_list);
+	sema_init(&t->support_sema, 0);
+	sema_init(&t->waiting_sema, 0);
+	sema_init(&t->create_sema, 0);
+	// fdt_init(t);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -471,7 +493,7 @@ void do_iret(struct intr_frame *tf)
 	__asm __volatile(
 		// next_tf 주소를 sp에 넣기
 		"movq %0, %%rsp\n"
-		// 물리 레지스터에 next_tf의 값들 전부 올린다.
+		// 물리 레지스터에 next_tf의 gp레지스터의 값들 전부 올린다.
 		"movq 0(%%rsp),%%r15\n"
 		"movq 8(%%rsp),%%r14\n"
 		"movq 16(%%rsp),%%r13\n"
@@ -487,12 +509,19 @@ void do_iret(struct intr_frame *tf)
 		"movq 96(%%rsp),%%rcx\n"
 		"movq 104(%%rsp),%%rbx\n"
 		"movq 112(%%rsp),%%rax\n"
+
 		"addq $120,%%rsp\n"
-		"movw 8(%%rsp),%%ds\n"
+
 		"movw (%%rsp),%%es\n"
+		"movw 8(%%rsp),%%ds\n"
+
 		"addq $32, %%rsp\n"
+
 		// interrupt_disable -> schedule -> do_iret 순으로 실행되기 때문애 복귀는 무조건 가능하다.
-		// pc가 인터럽트 발생 전 위치로 복귀
+		// rsp 를 사용해서 rip,cs,eflags,rsp,ss를 복원해주는 작업
+		// 왜 쓰냐? 조놈들은 직접 %%문법으로 사용 못하는 것들이니까
+		// pushf instruction을 사요하는 이유와 같다.
+		// 이것 때문에 rsp에 tf의 메모리 주소를 처음에 넣었던 것이다.
 		"iretq"
 		: : "g"((uint64_t)tf) : "memory");
 }
@@ -513,27 +542,13 @@ thread_launch(struct thread *th)
 	uint64_t tf_cur = (uint64_t)&running_thread()->tf;
 	uint64_t tf = (uint64_t)&th->tf;
 	ASSERT(intr_get_level() == INTR_OFF);
-
-	/* The main switching logic.
-	 * We first restore the whole execution context into the intr_frame
-	 * and then switching to the next thread by calling do_iret.
-	 * Note that, we SHOULD NOT use any stack from here
-	 * until switching is done. */
 	__asm __volatile(
-		/* Store registers that will be used. */
-
-		// 아래 레지스터를 사용해서 이후의 작업을 수행하겠다.
 		"push %%rax\n"
 		"push %%rbx\n"
 		"push %%rcx\n"
 
-		/* Fetch input once */
-		// 현재 thread의 tf주소 rax에 저장
-		// %0 : 0번째 argument -- 가장 아래에 c언어 변수입력하는 곳 확인
 		"movq %0, %%rax\n"
-		// next thread의 tf주소 rcx에 저장
 		"movq %1, %%rcx\n"
-		// 범용 레지스터 값들을 전부다 cur_tf의 메모리 위체에 저장
 		"movq %%r15, 0(%%rax)\n"
 		"movq %%r14, 8(%%rax)\n"
 		"movq %%r13, 16(%%rax)\n"
@@ -546,16 +561,19 @@ thread_launch(struct thread *th)
 		"movq %%rdi, 72(%%rax)\n"
 		"movq %%rbp, 80(%%rax)\n"
 		"movq %%rdx, 88(%%rax)\n"
+
 		"pop %%rbx\n" // Saved rcx
 		"movq %%rbx, 96(%%rax)\n"
 		"pop %%rbx\n" // Saved rbx
 		"movq %%rbx, 104(%%rax)\n"
 		"pop %%rbx\n" // Saved rax
 		"movq %%rbx, 112(%%rax)\n"
-		"addq $120, %%rax\n"
-		"movw %%es, (%%rax)\n"
-		"movw %%ds, 8(%%rax)\n"
-		"addq $32, %%rax\n"
+
+		// "addq $120, %%rax\n"
+		"movw %%es, 120(%%rax)\n"
+		"movw %%ds, 128(%%rax)\n"
+		"addq $152, %%rax\n"
+
 		"call __next\n" // read the current rip.
 		"__next:\n"
 		"pop %%rbx\n"
@@ -568,10 +586,8 @@ thread_launch(struct thread *th)
 		"mov %%rsp, 24(%%rax)\n" // rsp
 		"movw %%ss, 32(%%rax)\n"
 
-		// do_iret 함수의 1st argument로 next_tf구조체를 가리키는 주소 저장
 		"mov %%rcx, %%rdi\n"
 
-		// rsp에 있는 데이터 다시 가져오기
 		"call do_iret\n"
 		"out_iret:\n"
 
@@ -593,6 +609,7 @@ do_schedule(int status)
 		struct thread *victim =
 			list_entry(list_pop_front(&destruction_req), struct thread, elem);
 		palloc_free_page(victim);
+		// palloc_free_multiple(victim, 100);
 	}
 	thread_current()->status = status;
 	schedule();
@@ -643,6 +660,8 @@ schedule(void)
 static tid_t
 allocate_tid(void)
 {
+	// tid의 시작값이 1이고 계속 +1만 하기 때문에
+	// 부모가 없을 경우 ppid를 0으로 해도 무방하다.
 	static tid_t next_tid = 1;
 	tid_t tid;
 
@@ -698,7 +717,7 @@ bool thread_compare_priority(struct list_elem *l, struct list_elem *s, void *aux
 // 현재 스레드와 ready list에 있는 리스트의 우선순위 확인하고 yield
 void thread_test_preemption(void)
 {
-	if (!list_empty(&ready_list) && thread_current()->priority < list_entry(list_front(&ready_list), struct thread, elem)->priority)
+	if (!list_empty(&ready_list) && !intr_context() && thread_current()->priority < list_entry(list_front(&ready_list), struct thread, elem)->priority)
 		thread_yield();
 }
 bool thread_compare_donate_priority(const struct list_elem *l,
@@ -718,5 +737,14 @@ void donate_priority(void)
 		struct thread *holder = cur->wait_on_lock->holder;
 		holder->priority = cur->priority;
 		cur = holder;
+	}
+}
+void fdt_init(struct thread *t)
+{
+	t->fdt = (struct file **)palloc_get_page(PAL_ZERO);
+	if (t->fdt == NULL)
+	{
+		palloc_free_page(t->fdt);
+		exit(-1);
 	}
 }

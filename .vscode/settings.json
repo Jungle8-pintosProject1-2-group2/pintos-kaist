@@ -1,0 +1,20 @@
+{
+    "files.associations": {
+        "syscall-nr.h": "c",
+        "lib.h": "c",
+        "file.h": "c",
+        "string.h": "c",
+        "timer.h": "c",
+        "synch.h": "c",
+        "thread.h": "c",
+        "process.h": "c",
+        "interrupt.h": "c",
+        "list.h": "c",
+        "filesys.h": "c",
+        "serial.h": "c",
+        "io.h": "c",
+        "stdio.h": "c",
+        "*.inc": "c",
+        "syscall.h": "c"
+    }
+}
